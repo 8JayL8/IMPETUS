@@ -3,120 +3,14 @@ import file_utils
 import section_checks   # All physics checks for each section (uses physics.py)
 from physics import G   # gravity (m/s^2)
 import matplotlib.pyplot as plt
+# Helpers shared by the track part functions (vectors, ramps, building / saving a part)
+from track_helpers import (
+    _left, _planar_normals, _rotate_normals, _banked_normals, _smootherstep,
+    _rotate_about, _carry_normal, _cobra_unit_shape, _gentle_ramp,
+    _finish, _build, _load_prebuilt,
+)
 
 INVERT_TRACKS = ["Thrills 2", "Ends"]   # Inverted tracks
-
-
-# ========================================================================
-#                   Helpers shared by the track part functions
-# ========================================================================
-# When a prebuilt track's X positions are stretched/squashed, its front (tangent) vectors
-# must be stretched the same way, otherwise the radius calculation uses the old shape.
-def _stretch_front(Fx, Fy, Fz, x_stretch):
-    Fx = Fx * x_stretch
-    mag = np.sqrt(Fx**2 + Fy**2 + Fz**2)
-    mag = np.where(mag == 0, 1.0, mag)
-    return Fx / mag, Fy / mag, Fz / mag
-
-
-# Front vector = step from each point to the next (the last point repeats the previous step)
-def _front(X, Y, Z):
-    steps = (np.diff(X), np.diff(Y), np.diff(Z))
-    return tuple(np.append(d, d[-1]).astype(float) for d in steps)
-
-
-# Left vector (position x front)
-def _left(X, Y, Z, Fx, Fy, Fz):
-    return Y * Fz - Z * Fy, Z * Fx - X * Fz, X * Fy - Y * Fx
-
-
-# Normal vectors for a track that stays in the X-Y plane (rollback, rollup):
-# the tangent rotated 90 degrees upward
-def _planar_normals(X, Y):
-    pts = len(X)
-    Nx, Ny, Nz = np.zeros(pts), np.zeros(pts), np.zeros(pts)
-    dx, dy = np.diff(X), np.diff(Y)
-
-    hyp = np.sqrt(dx**2 + dy**2)
-    hyp = np.where(hyp == 0, 1, hyp)  # Prevent division by zero
-
-    Nx[:-1], Ny[:-1] = -dy / hyp, dx / hyp
-    Nx[-1], Ny[-1] = Nx[-2], Ny[-2]
-    return Nx, Ny, Nz
-
-
-# Normal vectors for a banked 3D track (corkscrew, helix, horseshoe).
-# Starts with the normal tilted by the bank angle Phi (degrees), then rotates it to follow
-# the track's direction: first around Y (heading in the X-Z plane, matrix Ry), then around
-# Z (climb angle, matrix Rz), i.e. N = Rz @ Ry @ N for every point.
-#   forward_first: the first point's direction is the step to the second point.
-#                  Otherwise it is the first point's position (as the original MATLAB code did).
-# Points with no length (no direction) are left unrotated.
-def _rotate_normals(X, Y, Z, Phi, forward_first=False):
-    if forward_first:
-        first = (X[1] - X[0], Y[1] - Y[0], Z[1] - Z[0])
-    else:
-        first = (X[0], Y[0], Z[0])
-    dX = np.concatenate(([first[0]], np.diff(X)))
-    dY = np.concatenate(([first[1]], np.diff(Y)))
-    dZ = np.concatenate(([first[2]], np.diff(Z)))
-
-    dXZ = np.sqrt(dX**2 + dZ**2)
-    dS = np.sqrt(dX**2 + dY**2 + dZ**2)
-
-    # Unrotated normal: (0, cos(Phi), -sin(Phi))
-    phi = np.radians(Phi)
-    n_y, n_z = np.cos(phi), -np.sin(phi)
-
-    # Ry = [[cos_y, 0, -sin_y], [0, 1, 0], [sin_y, 0, cos_y]]
-    has_xz = dXZ > 1e-9
-    safe_xz = np.where(has_xz, dXZ, 1.0)
-    cos_y = np.where(has_xz, dX / safe_xz, 1.0)
-    sin_y = np.where(has_xz, dZ / safe_xz, 0.0)
-    a, b, c = -sin_y * n_z, n_y, cos_y * n_z
-
-    # Rz = [[cos_z, -sin_z, 0], [sin_z, cos_z, 0], [0, 0, 1]]
-    has_s = dS > 1e-9
-    safe_s = np.where(has_s, dS, 1.0)
-    cos_z = np.where(has_s, dXZ / safe_s, 1.0)
-    sin_z = np.where(has_s, dY / safe_s, 0.0)
-    return cos_z * a - sin_z * b, sin_z * a + cos_z * b, c
-
-
-# Saves a track part's segment CSV and returns its track content tuple
-def _finish(file_name, prop, X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz):
-    pts = len(X)
-    data = np.column_stack((np.arange(1, pts+1), X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz))
-    file_utils.write_csv(data, pts, prop, file_name)
-    return (X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz, file_name)
-
-
-# Same as _finish, but works out the front and left vectors from the positions
-def _build(file_name, prop, X, Y, Z, Nx, Ny, Nz):
-    Fx, Fy, Fz = _front(X, Y, Z)
-    Lx, Ly, Lz = _left(X, Y, Z, Fx, Fy, Fz)
-    return _finish(file_name, prop, X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz)
-
-
-# Reads a prebuilt track (from Prebuilt_tracks/), scales it so its max height is h,
-# and stretches its X by x_stretch
-def _load_prebuilt(csv_name, h, x_stretch, file_name):
-    data = file_utils.read_csv(csv_name)
-    track = data.copy()
-
-    # Scales the track based on your input height
-    track[:, 1:4] = track[:, 1:4] * h / np.max(data[:, 2])
-
-    X, Y, Z = track[:, 1] * x_stretch, track[:, 2], track[:, 3]
-    if x_stretch == 1:
-        Fx, Fy, Fz = track[:, 4], track[:, 5], track[:, 6]
-    else:
-        Fx, Fy, Fz = _stretch_front(track[:, 4], track[:, 5], track[:, 6], x_stretch)
-    Lx, Ly, Lz = track[:, 7], track[:, 8], track[:, 9]
-    Nx, Ny, Nz = track[:, 10], track[:, 11], track[:, 12]
-
-    file_utils.write_csv(track, len(track), h, file_name)
-    return (X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz, file_name)
 
 
 # This class is used to store all track part functions
@@ -205,46 +99,45 @@ class TrackPart:
 
     # Corkscrew track part (done)
     @staticmethod
+    # h = height of each barrel (both barrels are h tall, i.e. barrel radius = h/2)
     def corkscrew_func(h):
-        H = h * 4 # Total height of corkscrew
-        r1 = H / 2 # Radius of corkscrew
-        B = 1 / (2 * r1)
-        stretch_factor = 2 # Stretch factor for the corkscrew
+        R = h / 2               # barrel radius
+        clearance = 1.0         # barrel bottom stays this far off the ground (was 0: it dipped to the ground)
+        Yc = R + clearance      # height of the barrel's centre line (the max height is h + clearance)
+        b = 0.7 * h             # forward distance per radian of roll (pitch = 2*pi*b per full roll),
+                                # in proportion to h so every size has the same shape
+        valley_radius = 30.0    # aim for entry/exit bends at least this wide (keeps the valley G-force down)
 
-        l2_base = ((3 * np.pi * np.sqrt(H - h)) / 2) * stretch_factor
-        l1 = (-3 * h * np.pi / (2*l2_base) + np.sqrt((3 * h *np.pi / (2 * l2_base))**2 + 6 * B * h)) / (2 * B)
-        A = h/(2*l1**3)-B/l1
-
-        # Section 1 (Track before the loop)
-        X1 = np.linspace(0, l1, 50)
-        t_norm1 = X1 / l1
-        smooth_modifier = (3 * t_norm1**2 - 2 * t_norm1**3)
-        Y1 = ((A * X1**3) + (B * X1**2)) * smooth_modifier
+        # Section 1 (lead-in): smooth ramp from the ground up to the side of the barrel,
+        # arriving at the barrel's starting slope (dY/dX = R / b)
+        X1, Y1 = _gentle_ramp(Yc, R / b, valley_radius)
+        l1 = X1[-1]
         Z1 = np.zeros_like(X1)
+        t_norm1 = np.linspace(0, 1, len(X1))
         Phi1 = -90 * (0.5 - 0.5 * np.cos(np.pi * t_norm1))
 
-        # Section 2 (Track for the loop of corkscrew)
-        l2 = l2_base
-        t = np.arange(0, 3 * np.pi, 0.01)
-        X2 = l2 * t / (3 * np.pi) + X1[-1]
-        Y2 = (h / 2) * (1 + np.sin(t)) # Responsible for the loop angle
-        Z2 = (h / 2) * (1 - np.cos(t)) + Z1[-1] # Offset to the side, so that the track doesn't turn into itself
-        Phi2 = -90 - (540 / (3 * np.pi))*t
+        # Section 2 (the barrels): 1.5 rolls around the centre line, two inversions
+        # linspace so the barrel ends exactly at 3*pi (arange stopped at 9.42, leaving a 3 cm step into the exit)
+        t = np.linspace(0, 3 * np.pi, int(np.ceil(3 * np.pi / 0.01)) + 1)
+        X2 = b * t + l1
+        Y2 = Yc + R * np.sin(t)
+        Z2 = R * (1 - np.cos(t))   # rolls to the side so the track doesn't turn into itself
+        Phi2 = -90 - (540 / (3 * np.pi)) * t
 
-        # Section 3 (Track after the loop)
-        X3 = np.linspace(0, l1, len(X1)) + X2[-1]
-        Y3 = np.flip(Y1)
-        Z3 = Z2[-1] - np.flip(Z1)
-        Phi3 = -np.flip(Phi1)
+        # Section 3 (exit): mirror image of the lead-in, back down to the ground
+        X3 = X2[-1] + (l1 - X1[::-1])
+        Y3 = Y1[::-1]
+        Z3 = np.full_like(X1, Z2[-1])
+        Phi3 = -Phi1[::-1]
 
-        # Combines the three sections into one
-        X = np.concatenate([X1, X2, X3])
-        Y = np.concatenate([Y1, Y2, Y3])
-        Z = np.concatenate([Z1, Z2, Z3])
-        Phi = np.concatenate([Phi1, Phi2, Phi3])
+        # Combines the three sections into one (dropping the repeated joining points)
+        X = np.concatenate([X1, X2[1:], X3[1:]])
+        Y = np.concatenate([Y1, Y2[1:], Y3[1:]])
+        Z = np.concatenate([Z1, Z2[1:], Z3[1:]])
+        Phi = np.concatenate([Phi1, Phi2[1:], Phi3[1:]])
 
         Nx, Ny, Nz = _rotate_normals(X, Y, Z, Phi)
-        return _build("corkscrew", r1, X, Y, Z, Nx, Ny, Nz)
+        return _build("corkscrew", h, X, Y, Z, Nx, Ny, Nz)
 
     # Loop with constant G-force (checked)
     @staticmethod
@@ -294,8 +187,11 @@ class TrackPart:
 
         Nx, Ny, Nz = np.array(Nx), np.array(Ny), np.array(Nz)
 
+        # Side (Z) offset so the exit track passes beside the entry track instead of through it.
+        # It grows with the loop's height (25% of h), but is never less than the original 2 m.
+        z_offset = max(0.25 * h, 2.0)
         xx = np.arange(1, len(X)+1)
-        Z = np.cos((np.pi / max(xx)) * xx) - 1 # Adjust Z offset to create the loop shape without colliding with itself
+        Z = (z_offset / 2) * (np.cos((np.pi / max(xx)) * xx) - 1)
 
         # Front vector here is 0 at the last point
         Fx, Fy, Fz = np.diff(X, append=X[-1]), np.diff(Y, append=Y[-1]), np.diff(Z, append=Z[-1])
@@ -311,82 +207,162 @@ class TrackPart:
     # ========================================================================
     #                               Turn Tracks
     # ========================================================================
-    # Cobra Roll track part (done)
+    # Cobra Roll track part, built from equations (h = height of the two tops)
+    # Two inversions; the train leaves heading back the way it came, offset to the side.
+    #   First half:
+    #     1. Half loop: an Euler spiral (clothoid). Its curvature grows steadily from 0 (so it starts
+    #        smoothly from flat track) up to 1/r_top at the top, where the train is upside-down heading -X.
+    #     2. Half corkscrew: dives and turns 90 degrees (heading -X -> -Z) down to the "neck",
+    #        rolling back upright. It starts with the same curvature as the top of the half loop (no jolt).
+    #   Second half: the first half mirrored about the neck and run backwards, so the two halves meet
+    #   smoothly at the neck and the exit heads -X.
     @staticmethod
     def cobrarollCG_func(h):
-        return _load_prebuilt("flashbackcobraroll.csv", h, 3, "cobrarollCG")
+        # Old version: loaded a prebuilt CSV. Half of its direction vectors pointed the wrong way,
+        # and stretching it 3x in X tilted its up vectors by up to 30 degrees.
+        # return _load_prebuilt("flashbackcobraroll.csv", h, 3, "cobrarollCG")
 
-    # Helix track part (done)
+        neck_fraction = 0.35   # neck height as a fraction of the top height
+        step = 0.3             # point spacing (m)
+
+        # Shape with a top radius of 1 (the same for every h, so it is worked out once and reused)
+        P_loop, T_loop, loop_length, P_cork, T_cork, cork_length = _cobra_unit_shape(neck_fraction)
+        top_height = P_loop[-1, 1]
+        n_fine = len(P_loop)
+
+        # Resample both pieces evenly (about `step` metres apart) at full size
+        scale = h / top_height        # = top radius in metres
+        def resample(P, T, length):
+            n = max(int(np.ceil(length * scale / step)), 20)
+            idx = np.linspace(0, n_fine - 1, n + 1)
+            interp = lambda A: np.column_stack([np.interp(idx, np.arange(n_fine), A[:, k]) for k in range(3)])
+            T_new = interp(T)
+            return interp(P), T_new / np.linalg.norm(T_new, axis=1)[:, None]
+        P1, T1 = resample(P_loop, T_loop, loop_length)
+        P2, T2 = resample(P_cork, T_cork, cork_length)
+        P = np.vstack([P1, P2[1:]]) * scale
+        T = np.vstack([T1, T2[1:]])
+
+        # Up vectors. Half loop: the inward normal of the loop (upside-down at the top).
+        # Half corkscrew: carried along without twisting, plus a smooth roll so it is upright at the neck.
+        n1 = len(P1)
+        N = np.zeros_like(P)
+        N[:n1] = np.column_stack((-T[:n1, 1], T[:n1, 0], np.zeros(n1)))
+        N[n1 - 1:] = _carry_normal(P[n1 - 1:], T[n1 - 1:], N[n1 - 1])
+        want = np.array([0.0, 1.0, 0.0]) - T[-1, 1] * T[-1]
+        want /= np.linalg.norm(want)
+        roll = np.arctan2(np.cross(N[-1], want) @ T[-1], N[-1] @ want)
+        w = np.linspace(0, 1, len(P) - n1 + 1)[1:]
+        N[n1:] = _rotate_about(N[n1:], T[n1:], roll * (3 * w**2 - 2 * w**3))
+
+        # Second half: mirror about the neck (z -> 2 * z_neck - z) and run backwards.
+        # Up vectors are mirrored too (only their z flips; "up" is not reversed with the direction).
+        z_neck = P[-1, 2]
+        P_back = P[::-1].copy()
+        P_back[:, 2] = 2 * z_neck - P_back[:, 2]
+        N_back = N[::-1].copy()
+        N_back[:, 2] *= -1
+
+        X = np.concatenate([P[:, 0], P_back[1:, 0]])
+        Y = np.concatenate([P[:, 1], P_back[1:, 1]])
+        Z = np.concatenate([P[:, 2], P_back[1:, 2]])
+        Nx = np.concatenate([N[:, 0], N_back[1:, 0]])
+        Ny = np.concatenate([N[:, 1], N_back[1:, 1]])
+        Nz = np.concatenate([N[:, 2], N_back[1:, 2]])
+        return _build("cobrarollCG", h, X, Y, Z, Nx, Ny, Nz)
+
+    # Helix track part (h = height; helix radius = 2h, 1.5 turns)
+    #   1. Level, unbanked straight in (along +X), climbing smoothly from 0 to h
+    #   2. Spiral of 1.5 turns, descending smoothly from h to 0. The curve tightens gradually over the
+    #      first 45 degrees and loosens over the last 45 (curvature changes linearly: a clothoid),
+    #      and the banking (45 deg at the top -> 63.4 deg at the bottom) rolls in and out with it.
+    #   3. Level, unbanked straight out (along -X) back to X = 0
+    # Points are evenly spaced (~0.5 m) along the track.
     @staticmethod
     def helix_func(h):
-        R = 2 * h
+        R = 2 * h                       # helix radius
+        total_turn = 3 * np.pi          # 1.5 turns: heading +X -> -X
+        ease = np.radians(45.0)         # angle used to tighten into / loosen out of the circle
+        step = 0.5                      # point spacing (m)
 
-        # All X components to the track
-        X1 = np.arange(0, 3*R + 1, 1)
-        X2 = np.arange(3*R + 1, 4*R + 1, 1)
-        X3 = np.arange(4*R - 1, 2*R - 1, -1)
-        X4 = np.arange(2*R + 1, 4*R + 1, 1)
-        X5 = np.arange(4*R - 1, 3*R - 1, -1)
-        X6 = np.arange(3*R - 1, -1, -1)
+        # Spiral: curvature rises 0 -> 1/R over ease_length, stays 1/R, then falls back to 0
+        ease_length = 2 * R * ease      # a linear curvature ramp turns through ease over this length
+        circle_length = R * (total_turn - 2 * ease)
+        turn_length = 2 * ease_length + circle_length
+        n_turn = max(int(np.ceil(turn_length / step)), 100)
+        s = np.linspace(0, turn_length, n_turn + 1)
+        curvature = np.where(s < ease_length, s / ease_length,
+                             np.where(s > turn_length - ease_length, (turn_length - s) / ease_length, 1.0)) / R
+        ds = np.diff(s)
+        heading = np.r_[0, np.cumsum(0.5 * (curvature[1:] + curvature[:-1]) * ds)]
+        x_turn = np.r_[0, np.cumsum(0.5 * (np.cos(heading[1:]) + np.cos(heading[:-1])) * ds)]
+        z_turn = -np.r_[0, np.cumsum(0.5 * (np.sin(heading[1:]) + np.sin(heading[:-1])) * ds)]
 
-        # All Y components to the track
-        Y1 = (h/2) * (1 - np.cos((np.pi*X1) / (3*R)))
-        helix_steps = 6 * R
-        Y2345 = np.max(Y1) - (h/2) * (1 - np.cos(np.pi * np.arange(1, helix_steps + 1, 1) / helix_steps))
-        Y6 = np.zeros(len(X6))
+        # 1. Entry straight (3R long): climbs 0 -> h with no sudden change in slope
+        entry_length = 3 * R
+        n_entry = max(int(np.ceil(entry_length / step)), 10)
+        X1 = np.linspace(0, entry_length, n_entry + 1)
+        Y1 = h * _smootherstep(X1 / entry_length)
 
-        # All Z components to the track (points just outside the circle are put on it)
-        def circle(Xs):
-            return np.sqrt(np.clip(R**2 - (Xs - 3*R)**2, 0, None))
-        Z1 = np.zeros(len(X1))
-        Z2 = -R + circle(X2)
-        Z3 = -R - circle(X3)
-        Z4 = -R + circle(X4)
-        Z5 = -R - circle(X5)
-        Z6 = np.full(len(X6), -2*R)
+        # 2. Spiral: descends h -> 0; banking 45 -> 63.4 degrees, scaled in / out with the curvature
+        u = s / turn_length
+        X2 = entry_length + x_turn
+        Y2 = h * (1 - _smootherstep(u))
+        Z2 = z_turn
+        Phi2 = (54.2 - 9.2 * np.cos(np.pi * u)) * (curvature * R)
 
-        # All Phi components to the track (angle)
-        Phi1 = (45/2) * (1 - np.cos((np.pi*X1) / (3*R)))
-        Phi2345 = 54.2 + 9.2 * (-np.cos(np.pi * np.arange(1, helix_steps + 1, 1) / helix_steps))
-        Phi6 = 63.4 + (63.4/2) * (-1 + np.cos(np.pi * X6 / (3*R)))
+        # 3. Exit straight: level and unbanked, back to X = 0
+        n_exit = max(int(np.ceil(X2[-1] / step)), 2)
+        X3 = np.linspace(X2[-1], 0, n_exit + 1)
 
-        # Combining compnents
-        X = np.concatenate([X1, X2, X3, X4, X5, X6])
-        Y = np.concatenate([Y1, Y2345, Y6])
-        Z = np.concatenate([Z1, Z2, Z3, Z4, Z5, Z6])
-        Phi = np.concatenate([Phi1, Phi2345, Phi6])
+        X = np.concatenate([X1, X2[1:], X3[1:]])
+        Y = np.concatenate([Y1, Y2[1:], np.zeros(n_exit)])
+        Z = np.concatenate([np.zeros(n_entry + 1), Z2[1:], np.full(n_exit, Z2[-1])])
+        Phi = np.concatenate([np.zeros(n_entry + 1), Phi2[1:], np.zeros(n_exit)])
 
-        Nx, Ny, Nz = _rotate_normals(X, Y, Z, Phi)
+        Nx, Ny, Nz = _banked_normals(X, Y, Z, Phi)
         return _build("helix", h, X, Y, Z, Nx, Ny, Nz)
 
     # Horseshoe roll track part (done)
+    # h = height of the horseshoe; the turn is 2h wide (same footprint as before)
+    #   1. Level, unbanked straight in (along +X)
+    #   2. 180 degree turn: it tightens and loosens gradually, climbs to h and drops back
+    #      (highest at the tightest point, where the train is slowest), banking rolls in and out with it
+    #   3. Level, unbanked straight back out (along -X), ending 2h to the side of the start
+    # Points are evenly spaced (~0.5 m) along the track.
     @staticmethod
     def horseshoe_func(h):
-        R = h
+        R = h                       # half the width of the turn
+        bank_max = 63.4             # banking at the middle of the turn (degrees)
+        straight = max(R, 5.0)      # length of each straight
+        step = 0.5                  # point spacing (m)
 
-        X1 = np.arange(0, R, 1)
-        X2 = np.arange(R, 2 * R, 1)
-        X3 = np.arange(2 * R, R, -1)
-        X4 = np.arange(R, -1, -1)
-        X = np.concatenate([X1, X2, X3, X4])
-        pts = len(X)
+        # Shape of the turn: heading goes 0 -> 180 degrees, turning slowly at the ends and fastest
+        # in the middle (the curvature rises and falls smoothly, so there's no sudden jolt sideways)
+        u_fine = np.linspace(0, 1, 4001)
+        heading = np.pi * (u_fine - np.sin(2 * np.pi * u_fine) / (2 * np.pi))
+        du = np.diff(u_fine)
+        x_fine = np.r_[0, np.cumsum(0.5 * (np.cos(heading[1:]) + np.cos(heading[:-1])) * du)]
+        z_fine = -np.r_[0, np.cumsum(0.5 * (np.sin(heading[1:]) + np.sin(heading[:-1])) * du)]
+        turn_length = 2 * R / -z_fine[-1]   # makes the turn exactly 2R wide
 
-        idx = np.arange(1, pts + 1)
-        Y = (h / 2) * (1 - np.cos(2 * np.pi * idx / pts))
+        n_turn = max(int(np.ceil(turn_length / step)), 60)
+        u = np.linspace(0, 1, n_turn + 1)
+        X2 = straight + turn_length * np.interp(u, u_fine, x_fine)
+        Z2 = turn_length * np.interp(u, u_fine, z_fine)
+        Y2 = h * np.sin(np.pi * u) ** 4                                # level at both ends, top = h in the middle
+        Phi2 = bank_max * (1 - np.cos(2 * np.pi * u)) / 2              # follows the curvature: 0 at the ends
 
-        Z1 = np.zeros(len(X1))
-        Z2 = -R + np.sqrt(R**2 - (X2 - R)**2)
-        Z3 = -R - np.sqrt(R**2 - (X3 - R)**2)
-        Z4 = -2.0 * R * np.ones(len(X4))
-        Z = np.concatenate([Z1, Z2, Z3, Z4])
+        # Straights (level, no banking)
+        n_straight = max(int(np.ceil(straight / step)), 2)
+        X1 = np.linspace(0, straight, n_straight + 1)
 
-        Phi1 = (63.4 / 2.0) * (1.0 - np.cos((np.pi / R) * X1))
-        Phi2 = 63.4 * np.ones(len(X2))
-        Phi3 = 63.4 * np.ones(len(X3))
-        Phi4 = (63.4 / 2.0) * (1.0 - np.cos((np.pi / R) * X4))
-        Phi = np.concatenate([Phi1, Phi2, Phi3, Phi4])
+        X = np.concatenate([X1, X2[1:], X1[::-1][1:]])
+        Y = np.concatenate([np.zeros(len(X1)), Y2[1:], np.zeros(n_straight)])
+        Z = np.concatenate([np.zeros(len(X1)), Z2[1:], np.full(n_straight, Z2[-1])])
+        Phi = np.concatenate([np.zeros(len(X1)), Phi2[1:], np.zeros(n_straight)])
 
-        Nx, Ny, Nz = _rotate_normals(X, Y, Z, Phi, forward_first=True)
+        Nx, Ny, Nz = _banked_normals(X, Y, Z, Phi)
         return _build("horseshoe", h, X, Y, Z, Nx, Ny, Nz)
 
 
@@ -401,7 +377,9 @@ class TrackPart:
         pts = len(X)
 
         Y, Z = np.zeros(pts), np.zeros(pts)
-        Fx, Fy, Fz = X.copy(), Y, Z
+        # Straight along +X: the front (direction) vector is (1, 0, 0) at every point
+        # (it used to be the X positions, which made the radius calculation see a fake 0.64 m bend)
+        Fx, Fy, Fz = np.ones(pts), np.zeros(pts), np.zeros(pts)
         Lx, Ly, Lz = np.zeros(pts), np.zeros(pts), -np.ones(pts)
         Nx, Ny, Nz = np.zeros(pts), np.ones(pts), np.zeros(pts)
         return _finish("break", L, X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz)
@@ -480,7 +458,8 @@ class TrackPart:
 
     # Combine multiple track parts into one (Done)
     @staticmethod
-    def combine_tracks(*parts, section_folder ,coaster_name):
+    # losses: None = frictionless (default), or physics.make_losses(...) for friction / air resistance
+    def combine_tracks(*parts, section_folder ,coaster_name, write=True, losses=None):
         # Parts include the following:
         # "section": the section of the track part (Starts, Thrills 1, Turns, Thrills 2, Ends)
         # "type": the type of the track part
@@ -497,7 +476,7 @@ class TrackPart:
         pieces = [[arr.ravel().astype(float) for arr in parts[0]["arrays"][:12]]]
         # Get the velocity exiting from the starting track
         start_section = parts[0]["section"]
-        v_exit = parts[0]["v_exit"]
+        v_exit = section_checks.start_exit_speed(parts[0]["type"], parts[0]["arrays"], parts[0]["v_exit"], losses)
         track_data[start_section]["stats"]["velocity_exit"] = v_exit
 
 
@@ -508,7 +487,7 @@ class TrackPart:
 
             # === Physics checks for this section (see section_checks.py) ===
             # Done before the part is flipped/moved, using the speed it enters with
-            stats, checks, v_exit = section_checks.analyze_section(section_name, section_type, part["arrays"], v_exit)
+            stats, checks, v_exit = section_checks.analyze_section(section_name, section_type, part["arrays"], v_exit, losses)
             track_data[section_name]["stats"] = stats
             track_data[section_name]["checks"] = checks
 
@@ -546,9 +525,11 @@ class TrackPart:
             X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz = TrackPart.add_loop_back(temp)
 
         # === Combine all the data into a single array and write to file_utils ===
-        pts = len(X)
-        data = np.column_stack((np.arange(1, pts+1), X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz))
-        file_utils.csv_noLimits_format(data, pts, 0, f"{section_folder}/Coasters/{coaster_name}")
+        # write=False skips the file (used by the web frontend's live preview)
+        if write:
+            pts = len(X)
+            data = np.column_stack((np.arange(1, pts+1), X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz))
+            file_utils.csv_noLimits_format(data, pts, 0, f"{section_folder}/Coasters/{coaster_name}")
 
         # === Data for SolidWorks ===
         # Clean up the data so that its viable to be used by SolidWorks for 3D printing

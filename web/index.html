@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IMPETUS – Coaster Designer</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header>
+    <h1>IMPETUS</h1>
+    <span id="status" class="status">Loading…</span>
+    <div class="header-actions">
+      <label class="toggle"><input type="checkbox" id="show-direction" checked> Direction</label>
+      <label class="toggle"><input type="checkbox" id="show-normals"> Normals</label>
+      <label class="toggle"><input type="checkbox" id="show-supports" checked> Supports</label>
+      <button id="fit-btn" type="button">Fit view</button>
+      <button id="export-btn" type="button" class="primary">Export CSV</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sections" aria-label="Track sections">
+      <div class="card physics-card">
+        <div class="card-head"><span class="card-name">Physics</span></div>
+        <div class="physics-buttons">
+          <button type="button" id="friction-btn" class="physics-toggle" aria-pressed="false">Friction: Off</button>
+          <button type="button" id="air-btn" class="physics-toggle" aria-pressed="false">Air resistance: Off</button>
+        </div>
+
+        <div id="friction-fields" class="physics-fields" hidden>
+          <label title="Friction force = μ × the force pressing the wheels onto the track">
+            Rolling friction μ <input type="number" id="mu-input" step="0.001">
+          </label>
+          <button type="button" class="link-btn" id="friction-reset">Reset to default</button>
+        </div>
+
+        <div id="air-fields" class="physics-fields" hidden>
+          <label title="Drag force = ½ × air density × Cd × area × v²">
+            Drag coefficient C<sub>d</sub> <input type="number" id="cd-input" step="0.05">
+          </label>
+          <label>Frontal area (m²) <input type="number" id="area-input" step="0.1"></label>
+          <label>Train mass (kg) <input type="number" id="mass-input" step="100"></label>
+          <button type="button" class="link-btn" id="air-reset">Reset to defaults</button>
+        </div>
+
+        <div id="physics-summary" class="physics-summary"></div>
+      </div>
+    </aside>
+    <div class="splitter splitter-v" id="split-left" role="separator" aria-orientation="vertical"
+         title="Drag to resize · drag closed to hide · double-click to hide/show"></div>
+
+    <section class="views">
+      <div id="view3d" class="panel view3d">
+        <span class="panel-title">3D View</span>
+        <div class="ride-controls">
+          <button id="ride-btn" type="button" class="primary">▶ Start</button>
+          <button id="ride-reset" type="button" title="Back to the station">⏮</button>
+          <select id="ride-speed" title="Playback speed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+          <select id="cam-mode" title="Camera mode">
+            <option value="orbit" selected>Camera: Orbit</option>
+            <option value="free">Camera: Free</option>
+            <option value="ride">Camera: Ride</option>
+          </select>
+        </div>
+        <div id="cam-hint" class="cam-hint" hidden>
+          Drag to look · <b>W A S D</b> move · <b>E</b>/<b>Space</b> up · <b>Q</b>/<b>C</b> down ·
+          <b>Shift</b> faster · <b>Wheel</b> fly speed (<span id="cam-speed"></span>)
+        </div>
+        <div class="hud">
+          <div id="hud-speed" class="hud-speed">0 km/h</div>
+          <div id="hud-section" class="hud-section"></div>
+          <div id="hud-note" class="hud-note"></div>
+        </div>
+      </div>
+      <div class="splitter splitter-h" id="split-bottom" role="separator" aria-orientation="horizontal"
+           title="Drag to resize · drag closed to hide · double-click to hide/show"></div>
+      <div class="panel-row">
+        <div class="panel">
+          <span class="panel-title">Side View (distance vs height)</span>
+          <canvas id="profile"></canvas>
+        </div>
+        <div class="panel">
+          <span class="panel-title">Top View</span>
+          <canvas id="topview"></canvas>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="export-dialog">
+    <form method="dialog" id="export-form">
+      <h2>Export coaster</h2>
+      <label>Section folder <input name="section_folder" value="Test_Section" required></label>
+      <label>Coaster name <input name="coaster_name" value="Test_Coaster" required></label>
+      <p class="hint">Writes the NoLimits 2 CSV and the segment CSVs. Image layouts are still made by the desktop app (GUI.py).</p>
+      <p id="export-result" class="hint"></p>
+      <div class="dialog-actions">
+        <button value="cancel" formnovalidate>Close</button>
+        <button value="export" class="primary" id="export-go">Export</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="section-template">
+    <div class="card">
+      <div class="card-head">
+        <span class="swatch"></span>
+        <span class="card-name"></span>
+        <span class="badge"></span>
+      </div>
+      <select class="type-select"></select>
+      <div class="value-row">
+        <input type="range" class="value-slider" step="0.5">
+        <input type="number" class="value-input" step="0.5">
+        <span class="unit">m</span>
+      </div>
+      <div class="value-label"></div>
+      <div class="rec-label"></div>
+      <ul class="warnings"></ul>
+      <details class="stats">
+        <summary>Stats</summary>
+        <dl></dl>
+      </details>
+    </div>
+  </template>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
