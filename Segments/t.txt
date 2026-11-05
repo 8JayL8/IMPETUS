@@ -1,2 +1,0 @@
-This folder will be used to store segments/tracks parts for the whole rollercoaster.
-

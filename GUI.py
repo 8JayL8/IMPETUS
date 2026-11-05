@@ -6,8 +6,8 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QSizePolicy, QStackedWidget,
     QTabWidget, QFormLayout, QSlider, QScrollArea
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon, QPainter, QColor, QPen
+from PyQt6.QtCore import Qt, QTimer, QLocale
+from PyQt6.QtGui import QIcon, QPainter, QColor, QPen, QDoubleValidator
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.ticker import MultipleLocator
 from matplotlib.figure import Figure
@@ -27,6 +27,12 @@ THRILLS = ["Loop", "Camelback", "Corkscrew"]                        # Defines th
 TURNS = ["Cobra Roll", "Horseshoe", "Helix"]                        # Defines the turn track types
 ENDS = ["Brake", "Rollup"]                                          # Defines the ending track types
 ALL_TRACKS = STARTS + THRILLS + TURNS + ENDS                        # Defines all track types for validation
+RECOMMEND_SECTIONS = {                                              # Sections that get a recommended range from 'Starts'
+    "Thrills 1": THRILLS,
+    "Turns": TURNS,
+    "Thrills 2": THRILLS,
+    "Ends": ENDS,
+}
 CONTROL = {
     "Height": {
         "Lift Hill", "Rollback",
@@ -40,6 +46,23 @@ CONTROL = {
         "Brake"
     },
 }
+
+# Physics check -> warning shown when that check fails
+CHECK_WARNINGS = {
+    "velocity_check": "Not enough velocity to get through this section.",
+    "valley_check": "Valley G-force exceeds 5Gs.",
+    "inversion_check": "Too slow or too fast to clear the inversion peak.",
+    "peak_check": "Speed too high over crest (Airborne).",
+    "lateral_check": "Lateral turning G-forces exceed safe rider comfort (>1.5G).",
+    "rollup_check": "Rollup incline is not tall enough. The coaster will fly off the track.",
+    "brake_check": "Entry speed into exceeds allowed stopping threshold.",
+}
+
+# Shared stylesheets
+PANEL_TITLE_STYLE = "color: blue; font-size: 20px; background-color: white; padding: 5px; border-radius: 5px;"
+CARD_STYLE = "background-color: {background}; color: {text}; border-radius: 10px; margin-bottom: 2px; padding: 2px;"
+REC_LABEL_STYLE = "color: {color}; font-size: 11px; padding: 0px;"
+REC_OK_COLOR, REC_BAD_COLOR = "#27ae60", "#c0392b"
 # ========================================================================
 
 # Maps track types to their corresponding functions in the tracks module.
@@ -71,7 +94,7 @@ class StatsDialog(QDialog):
     def __init__(self, section_name, stats_data, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle(f"Statisitcs - {section_name}")
+        self.setWindowTitle(f"Statistics - {section_name}")
         self.resize(300, 200)
         self.setStyleSheet("""
             QDialog { background-color: #f8f9fa; }
@@ -102,14 +125,15 @@ class StatsDialog(QDialog):
 
 
 class DualInputDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, section="", coaster=""):
         super().__init__(parent)
         self.setWindowTitle("Coaster Details")
 
         layout = QFormLayout(self)
 
-        self.section_input = QLineEdit(self)
-        self.coaster_input = QLineEdit(self)
+        # Pre-filled with the previous build's names (empty the first time)
+        self.section_input = QLineEdit(section, self)
+        self.coaster_input = QLineEdit(coaster, self)
 
         layout.addRow("Enter Section:", self.section_input)
         layout.addRow("Enter Coaster Name:", self.coaster_input)
@@ -124,7 +148,7 @@ class DualInputDialog(QDialog):
         return self.section_input.text(), self.coaster_input.text()
 
 
-# Custom Slider (TODO - need to fix along with recommendation.py cause that's wrong)
+# Custom Slider (draws the recommended range from recommendation.py as a green band)
 class RangeIndicatorSlider(QSlider):
     def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
         super().__init__(orientation, parent)
@@ -189,14 +213,14 @@ class MainWindow(QMainWindow):
         self.main_widget = QWidget()
         self.main_widget.setStyleSheet("background-color: white;")
         self.setCentralWidget(self.main_widget)
-        self.layout = QVBoxLayout(self.main_widget)
+        self.main_layout = QVBoxLayout(self.main_widget)
 
         # Title
         title = QLabel("IMPETUS Coaster Creation")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("color: white; font-size: 24px; font-weight: bold; padding: 10px; background-color: #34495e; border-radius: 10px;")
         title.setFixedHeight(60)
-        self.layout.addWidget(title)
+        self.main_layout.addWidget(title)
 
         # Track Panel (Assembly and Visualization)
         self.track_widget = QWidget()
@@ -210,8 +234,14 @@ class MainWindow(QMainWindow):
         # Assembly and Visual Panels
         self.assembly_panel()
         self.visual_panel()
-        self.layout.addWidget(self.track_widget)
+        self.main_layout.addWidget(self.track_widget)
         self.create_button()
+
+        # Recommendations are recalculated shortly after the user stops typing/changing inputs
+        self.recommendation_timer = QTimer(self)
+        self.recommendation_timer.setSingleShot(True)
+        self.recommendation_timer.setInterval(300)
+        self.recommendation_timer.timeout.connect(self.update_recommendations)
 
         # Setup the track assembly sections (Initialize each section)
         for section in SECTIONS:
@@ -222,6 +252,10 @@ class MainWindow(QMainWindow):
         self.track_stats = {}
         self.checks = {}
 
+        # Remember the last names used so the dialog is pre-filled next time
+        self.last_section = ""
+        self.last_coaster = ""
+
     # ========================================================================
     #                       Assembly Panels and Controls
     # ========================================================================
@@ -231,7 +265,7 @@ class MainWindow(QMainWindow):
         self.assembly_layout = QVBoxLayout(self.assembly_widget)
 
         track_assembly_label = QLabel("Track Assembly")
-        track_assembly_label.setStyleSheet("color: blue; font-size: 20px; background-color: white; padding: 5px; border-radius: 5px;")
+        track_assembly_label.setStyleSheet(PANEL_TITLE_STYLE)
         track_assembly_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         track_assembly_label.setFixedHeight(40)
         self.assembly_layout.addWidget(track_assembly_label)
@@ -274,21 +308,21 @@ class MainWindow(QMainWindow):
 
         # Visual Label
         visual_label = QLabel("Track Visualization")
-        visual_label.setStyleSheet("color: blue; font-size: 20px; background-color: white; padding: 5px; border-radius: 5px;")
+        visual_label.setStyleSheet(PANEL_TITLE_STYLE)
         visual_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         visual_label.setFixedHeight(40)
         visual_layout.addWidget(visual_label)
 
         # Visual Stack (Placeholder and Tab Widget)
-        self.visual_constent_layout = QVBoxLayout()
-        visual_layout.addLayout(self.visual_constent_layout)
+        self.visual_content_layout = QVBoxLayout()
+        visual_layout.addLayout(self.visual_content_layout)
 
         # Placeholder Label (Inital State)
         self.placeholder_label = QLabel("Track visualization will appear here after assembly.")
         self.placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder_label.setStyleSheet("color: #7f8c8d; font-size: 16px;")
         self.placeholder_label.setWordWrap(True)
-        self.visual_constent_layout.addWidget(self.placeholder_label)
+        self.visual_content_layout.addWidget(self.placeholder_label)
 
         # Inital Tab Widget (Hidden until assembly is complete)
         self.visual_tab_widget = QTabWidget()
@@ -313,7 +347,7 @@ class MainWindow(QMainWindow):
             }
         """)
         self.visual_tab_widget.hide()
-        self.visual_constent_layout.addWidget(self.visual_tab_widget)
+        self.visual_content_layout.addWidget(self.visual_tab_widget)
 
         # Keep track of the plots
         self.track_plots = {}
@@ -368,13 +402,13 @@ class MainWindow(QMainWindow):
     #                           Create Button
     # ========================================================================
     def create_button(self):
-        self.create_button = QPushButton("Create")
-        self.create_button.setStyleSheet(
+        self.create_btn = QPushButton("Create")
+        self.create_btn.setStyleSheet(
             "background-color: #2ecc71; color: white; font-size: 18px;"
             "padding: 10px; border-radius: 10px;"
         )
-        self.create_button.clicked.connect(self.start_generating)
-        self.layout.addWidget(self.create_button)      
+        self.create_btn.clicked.connect(self.start_generating)
+        self.main_layout.addWidget(self.create_btn)      
 
 
     # ========================================================================
@@ -395,7 +429,7 @@ class MainWindow(QMainWindow):
         self.single_page_cards = {}
         for section in SECTIONS:
             card = QWidget()
-            card.setStyleSheet("background-color: #ffffff; color: blue; border-radius: 10px; margin-bottom: 2px; padding: 2px;")
+            card.setStyleSheet(CARD_STYLE.format(background="#ffffff", text="blue"))
             
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(10, 10, 10, 10)
@@ -490,13 +524,17 @@ class MainWindow(QMainWindow):
         elif section == "Ends":
             track_dropdown.addItems(ENDS)
         
-        # Setup the Length Input Field
-        length_input = QLineEdit()
-        length_input.setPlaceholderText("Track Value (Meters)")
-
         # Setup the Slider
         length_slider = RangeIndicatorSlider(Qt.Orientation.Horizontal)
         length_slider.setRange(1, 50)
+
+        # Setup the Length Input Field (only numbers can be typed; the range is checked on Create)
+        length_input = QLineEdit()
+        length_input.setPlaceholderText("Track Value (Meters)")
+        validator = QDoubleValidator(length_slider.minimum(), length_slider.maximum(), 2, length_input)
+        validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        validator.setLocale(QLocale.c())   # always "." as the decimal point
+        length_input.setValidator(validator)
 
         # ======= Test Value =======
         # length_input.setText("11")
@@ -508,27 +546,14 @@ class MainWindow(QMainWindow):
 
         # Connects Line Input Field to Slider (Changing input value changes the slider position)
         def sync_slider_from_text(text):
-            # Skip validation if box is empty
-            if not text:
-                return
-
             try:
-                val = int(text)
-                # Makes sure that if the input value is not within the set range
-                if length_slider.minimum() <= val <= length_slider.maximum():
-                    length_slider.blockSignals(True)
-                    length_slider.setValue(val)
-                    length_slider.blockSignals(False)
-
-                # If not throws an error message
-                elif val < length_slider.minimum() or val > length_slider.maximum():
-                    QMessageBox.warning(
-                        self,
-                        "Invalid Number",
-                        f"Track length must be within the range of {length_slider.minimum()} - {length_slider.maximum()}"
-                    )
+                val = float(text)
             except ValueError:
-                pass
+                return   # empty, or still being typed (e.g. "12.")
+            if length_slider.minimum() <= val <= length_slider.maximum():
+                length_slider.blockSignals(True)
+                length_slider.setValue(round(val))
+                length_slider.blockSignals(False)
         length_input.textChanged.connect(sync_slider_from_text)
 
         def update_length_label(track_name):
@@ -550,15 +575,27 @@ class MainWindow(QMainWindow):
         form.addRow(length_input)
         form.addRow(length_slider)
 
+        # Recommended range label (filled in by update_recommendations)
+        rec_label = QLabel("")
+        rec_label.setStyleSheet(REC_LABEL_STYLE.format(color=REC_OK_COLOR))
+        rec_label.hide()
+        form.addRow(rec_label)
+
         form_widget.dropdown = track_dropdown
         form_widget.input_field = length_input
         form_widget.slider = length_slider
+        form_widget.rec_label = rec_label
+
+        # Changing the 'Starts' track/value, or any section's track type, updates the recommendations
+        schedule_update = lambda *_: self.recommendation_timer.start()
+        track_dropdown.currentTextChanged.connect(schedule_update)
+        if section == "Starts":
+            length_input.textChanged.connect(schedule_update)
 
         self.tracks[section].append(form_widget)
 
     def show_section_stats(self, section_name):        
         if section_name in self.track_stats and section_name in self.checks:
-            track_type = self.track_stats[section_name]["type"]
             stats = self.track_stats[section_name]
             check_data = self.checks[section_name]
 
@@ -582,7 +619,7 @@ class MainWindow(QMainWindow):
 
 
                 if section_name.startswith("Thrills") or section_name == "Turns":
-                    track_type = str(stats.get('type', ''))
+                    track_type = stats["type"]
 
                     if stats.get('v_top') is not None:
                         section_data["Apex (Top) Velocity"] = f"{stats['v_top']:.2f} m/s"
@@ -637,7 +674,7 @@ class MainWindow(QMainWindow):
     # ========================================================================
     #                       Visual Helper Functions
     # ========================================================================
-    def update_visual(self, section_name, track_data, xy_composition):
+    def update_visual(self, images_folder, track_data, xy_composition):
         self.placeholder_label.hide()  # Hide the placeholder label
         self.visual_tab_widget.show()  # Show the visual widget
 
@@ -656,8 +693,8 @@ class MainWindow(QMainWindow):
         ax3d.plot3D(X, Z, Y, 'b-', label='Track Path')
         ax3d.plot3D(X + Nx, Z + Nz, Y + Ny, 'r-', alpha=0.4, label='Normals')
         ax3d.set_xlabel("X", fontsize=font_size)
-        ax3d.set_ylabel("Y", fontsize=font_size)
-        ax3d.set_zlabel("Z", fontsize=font_size)
+        ax3d.set_ylabel("Z", fontsize=font_size)
+        ax3d.set_zlabel("Y", fontsize=font_size)
         ax3d.tick_params(axis='both', which='major', labelsize=font_size - 2)
         ax3d.tick_params(axis='both', which='minor', labelsize=font_size - 4)
         
@@ -683,20 +720,6 @@ class MainWindow(QMainWindow):
         z_min_top, z_max_top = np.min(Z), np.max(Z)
         top_view_x_span = x_max_top - x_min_top
         top_view_y_span = z_max_top - z_min_top
-
-        # Calculate tracking properties
-        segment_boundaries = {}
-        current_horizontal_offset = 0
-        for idx, segment in enumerate(xy_composition):
-            local_horizontal = segment["XY"]
-            global_2d_horizontal = local_horizontal + current_horizontal_offset
-            
-            segment_boundaries[idx] = {
-                "start_x": global_2d_horizontal[0],
-                "end_x": global_2d_horizontal[-1],
-            }
-
-            current_horizontal_offset = global_2d_horizontal[-1]
 
         # === Plotting Individual Segments ===
         # Top View
@@ -774,62 +797,53 @@ class MainWindow(QMainWindow):
             ax.set_title(title, fontsize=font_size)
             canvas.draw()
 
-            # Automatically call to export the files
-            file_utils.export_layouts(section_name, track_data, xy_composition, self.track_plots)
+        # Export the image files once, after every view is formatted
+        file_utils.export_layouts(images_folder, track_data, xy_composition, self.track_plots)
 
 
     # ========================================================================
     #               Recommendation Based on 'Starts' Input
     # ========================================================================
-    # TODO (need to fix this so that the slider would give the correct thing)
+    # Shows the safe range (green band on the slider + label) for each section's track,
+    # based on the speed coming out of the 'Starts' section.
     def update_recommendations(self):
+        start_row = self.tracks["Starts"][0]
+        start_type = start_row.dropdown.currentText()
         try:
-            # Grab the 'Starts' section layout/widgets securely
-            start_rows = self.tracks.get("Starts", [])
-            if not start_rows:
-                return
-                
-            # Get the first row in the Starts section
-            start_row = start_rows[0] 
-            
-            # Securely find the drop-down and text input using findChild
-            start_dropdown = start_row.findChild(QComboBox)
-            start_input = start_row.findChild(QLineEdit)
-            
-            # If the UI hasn't fully rendered these yet, exit safely without crashing
-            if not start_dropdown or not start_input:
-                return
-                
-            # Extract current type and value
-            start_type = start_dropdown.currentText()
-            try:
-                start_val = float(start_input.text())
-            except ValueError:
-                return # User is still typing, or it's empty
-                
-            # Get recommendations based on total initial energy
-            recs = EnergyRecommendation.get_recommendations(start_type, start_val)
-            
-            # Loop through all subsequent sections to update their slider bounds
-            for section_name in ["Thrills 1", "Turns", "Thrills 2"]:
-                for row in self.tracks.get(section_name, []):
-                    row_dropdown = row.findChild(QComboBox)
-                    row_slider = row.findChild(RangeIndicatorSlider)
-                    
-                    # Skip if this specific row row isn't fully drawn yet
-                    if not row_dropdown or not row_slider:
-                        continue
-                        
-                    track_type = row_dropdown.currentText()
-                    
-                    if track_type in recs:
-                        min_rec, max_rec = recs[track_type]
-                        row_slider.set_recommendation_bounds(min_rec, max_rec)
-                                
-                            
-        except Exception as e:
-            print(f"Recommendation update idle: {e}")
+            start_val = float(start_row.input_field.text())
+        except ValueError:
+            start_val = None   # Empty, or the user is still typing
 
+        recs = None
+        if start_type and start_val is not None and start_val > 0:
+            try:
+                recs = EnergyRecommendation.get_recommendations(
+                    start_type, start_val, track_function_map, RECOMMEND_SECTIONS,
+                    value_range=(start_row.slider.minimum(), start_row.slider.maximum()))
+            except Exception as e:
+                print(f"Recommendation failed: {e}")
+
+        for section_name in RECOMMEND_SECTIONS:
+            for row in self.tracks[section_name]:
+                track_type = row.dropdown.currentText()
+
+                # Nothing to recommend yet (no valid 'Starts' or no track picked)
+                if recs is None or not track_type:
+                    row.slider.set_recommendation_bounds(None, None)
+                    row.rec_label.hide()
+                    continue
+
+                bounds = recs[section_name].get(track_type)
+                if bounds:
+                    low, high = bounds
+                    row.slider.set_recommendation_bounds(low, high)
+                    row.rec_label.setText(f"Recommended: {low} - {high} m" if low != high else f"Recommended: {low} m")
+                    row.rec_label.setStyleSheet(REC_LABEL_STYLE.format(color=REC_OK_COLOR))
+                else:
+                    row.slider.set_recommendation_bounds(None, None)
+                    row.rec_label.setText(f"No safe {track_type} size for this start")
+                    row.rec_label.setStyleSheet(REC_LABEL_STYLE.format(color=REC_BAD_COLOR))
+                row.rec_label.show()
 
 
     # ========================================================================
@@ -841,43 +855,14 @@ class MainWindow(QMainWindow):
             if section_name == "Starts":
                 continue
 
-            section_passed = True
-
-            if not section_data.get("velocity_check", True):
-                warnings.append(f"{section_name}: Not enough velocity to get through this section.")
-                section_passed = False
-
-            if section_data.get("valley_check") is False:
-                warnings.append(f"{section_name}: Valley G-force exceeds 5Gs.")
-                section_passed = False
-
-            if section_data.get("inversion_check") is False:
-                warnings.append(f"{section_name}: Too slow or too fast to clear the inversion peak.")
-                section_passed = False
-
-            if section_data.get("peak_check") is False:
-                warnings.append(f"{section_name}: Speed too high over crest (Airborne).")
-                section_passed = False
-
-            if section_data.get("lateral_check") is False:
-                warnings.append(f"{section_name}: Lateral turning G-forces exceed safe rider comfort (>1.5G).")
-                section_passed = False
-
-            if section_data.get("rollup_check") is False:
-                warnings.append(f"{section_name}: Rollup incline is not tall enough. The coaster will fly off the track.")
-                section_passed = False
-
-            if section_data.get("brake_check") is False:
-                warnings.append(f"{section_name}: Entry speed into exceeds allowed stopping threshold.")
-                section_passed = False
+            # A check that is None doesn't apply to this track type, so only False fails
+            failed = [message for check, message in CHECK_WARNINGS.items() if section_data.get(check) is False]
+            warnings.extend(f"{section_name}: {message}" for message in failed)
 
             # Changes the color of the section, based on whether they passed or failed the checks
             if section_name in self.single_page_cards:
-                card_widget = self.single_page_cards[section_name]
-                if section_passed:
-                    card_widget.setStyleSheet("background-color: #2ecc71; color: #ffffff; border-radius: 10px; margin-bottom: 2px; padding: 2px;")
-                else:
-                    card_widget.setStyleSheet("background-color: #e74c3c; color: #ffffff; border-radius: 10px; margin-bottom: 2px; padding: 2px;")
+                background = "#e74c3c" if failed else "#2ecc71"
+                self.single_page_cards[section_name].setStyleSheet(CARD_STYLE.format(background=background, text="#ffffff"))
 
         return warnings
 
@@ -885,86 +870,75 @@ class MainWindow(QMainWindow):
     # ========================================================================
     #                       Create Helper Functions
     # ========================================================================
+    def ask_build_names(self):
+        # Keeps asking until the user picks a new name, confirms a replace, or cancels
+        while True:
+            dialog = DualInputDialog(self, self.last_section, self.last_coaster)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+
+            section_folder, coaster_name = dialog.get_inputs()
+            section_folder = section_folder.strip() or "Test_Section"
+            coaster_name = coaster_name.strip() or "Test_Coaster"
+            self.last_section, self.last_coaster = section_folder, coaster_name
+
+            # Same section + coaster name as an existing build -> confirm replacing it
+            if file_utils.build_exists(section_folder, coaster_name):
+                reply = QMessageBox.question(
+                    self, "Replace Previous Build?",
+                    f'"{coaster_name}" already exists in "{section_folder}".\n'
+                    "Do you want to replace the previous build?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    continue   # reopen the dialog so they can change the name
+
+            print(f"Section: {section_folder} | Coaster: {coaster_name}")
+            return section_folder, coaster_name
+
     def start_generating(self):
-        data = []
-        # Obtain track data from user inputs
+        # === 1) Validate every input before asking for names ===
+        requests = []
         for section in self.tracks:
             for track_row in self.tracks[section]:
-                track = track_row.findChild(QComboBox)
-                length = track_row.findChild(QLineEdit)
+                track_type = track_row.dropdown.currentText()
+                track_length = track_row.input_field.text()
 
-                track_type = track.currentText()
-                track_length = length.text()
-
-                # Validate inputs
                 if not track_type or not track_length:
                     QMessageBox.warning(self, "Incomplete Entry", "Please select a track type and enter a length for all tracks.")
                     return
-
-                # Validate length input
                 try:
                     length_value = float(track_length)
                 except ValueError:
                     QMessageBox.warning(self, "Invalid Length", f"Please enter a valid number for the length of the {track_type} track.")
                     return
-
-                # Check for valid track type and build the track segment
-                if track_type not in ALL_TRACKS:
-                    QMessageBox.warning(self, "Unkown Track", f"Track type {track_type} is not recognized.")
+                low, high = track_row.slider.minimum(), track_row.slider.maximum()
+                if not low <= length_value <= high:
+                    QMessageBox.warning(self, "Invalid Number",
+                                        f"The {track_type} track value must be within the range of {low} - {high}.")
+                    return
+                if track_type not in track_function_map:
+                    QMessageBox.warning(self, "Unknown Track", f"Track type {track_type} is not recognized.")
                     return
 
-                build_func = track_function_map.get(track_type)
-                if not build_func:
-                        QMessageBox.warning(self, "Missing Generator", f"No building rule found for {track_type}.")
-                        return
-                
-                segment_v_exit = 0.0
-                result = build_func(length_value)
+                requests.append((section, track_type, length_value))
 
-                if track_type in STARTS:
-                    if isinstance(result, tuple) and len(result) == 2:
-                        segment, raw_v = result
-                        # Extract the float speed value if it's trapped in an array or tuple
-                        if hasattr(raw_v, "__len__"):
-                            segment_v_exit = float(raw_v[0])
-                        else:
-                            segment_v_exit = float(raw_v)
-                    else:
-                        segment = result
-                        segment_v_exit = 0.0
-                else:
-                    segment = result
-
-                # Appends to data an array list of track type and its data list
-                # The data keeps tracks of section, type, and arrays for each track segment
-                data.append({
-                    "section": section,
-                    "type": track_type,
-                    "arrays": segment,
-                    "v_exit": segment_v_exit
-                })
-
-        # Check if there are valid tracks to assemble
-        if not data:
+        if not requests:
             QMessageBox.warning(self, "No Tracks", "No valid tracks to assemble.")
             return
-        
-        # === Ask the user for their section and coaster name ===
-        dialog = DualInputDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            section_folder, coaster_name = dialog.get_inputs()
 
-            if not section_folder.strip():
-                section_folder = "Test_Section"
-            if not coaster_name.strip():
-                coaster_name = "Test_Coaster"
-            print(f"Section: {section_folder} | Coaster: {coaster_name}")
-        else:
+        # === 2) Ask for section/coaster name (pre-filled, confirms replace) ===
+        names = self.ask_build_names()
+        if names is None:
             return
-        
-        # Initalize the folder structure using the section name provided as the base folder name.
-        # Within it, subfolders of 'images' and 'coasters' will be created to store the generated images and CSV files respectively.
-        file_utils.initalize_folders(section_folder)
+        section_folder, coaster_name = names
+
+        # === 3) Make the section folder FIRST so segments are saved inside it ===
+        # <section>/Coasters/<coaster>_0.csv, <section>/Images/<coaster>/, <section>/Segments/<coaster>/
+        # Only this coaster's old files are cleared; other coasters in the section are kept.
+        folders = file_utils.initalize_folders(section_folder, coaster_name)
+        section_path = folders["master"]
 
         wait = QMessageBox(self)
         wait.setWindowTitle("Assembling Tracks")
@@ -972,31 +946,46 @@ class MainWindow(QMainWindow):
         wait.show()
         QApplication.processEvents()
 
-        # Assemble and visualize tracks
         try:
-            combined_track, xy_composition, track_data = tracks.TrackPart.combine_tracks(*data, section_folder=section_folder, coaster_name=coaster_name)
-            all_track_stats = {name: {"type": data["section_type"], **data["stats"]} for name, data in track_data.items()}
-            all_track_checks = {name: data["checks"] for name, data in track_data.items()}
-            self.track_stats, self.checks = all_track_stats, all_track_checks
+            # === 4) Build each track part (writes to <section>/Segments) ===
+            data = []
+            for section, track_type, length_value in requests:
+                result = track_function_map[track_type](length_value)
+                segment_v_exit = 0.0
+                if track_type in STARTS and isinstance(result, tuple) and len(result) == 2:
+                    segment, raw_v = result
+                    segment_v_exit = float(np.ravel(raw_v)[0])
+                else:
+                    segment = result
 
-            if wait.isVisible():  
-                wait.close()
+                data.append({
+                    "section": section,
+                    "type": track_type,
+                    "arrays": segment,
+                    "v_exit": segment_v_exit
+                })
 
-            # Display physics failures to user if any occurred
-            warnings = self.process_physics_checks(all_track_checks)
-            if warnings:
-                warning_msg = "The track was built, but failed the following physics checks:\n\n" + "\n".join(warnings)
-                QMessageBox.warning(self, "Physics Warning", warning_msg)
+            # === 5) Combine, check physics, visualize, export ===
+            combined_track, xy_composition, track_data = tracks.TrackPart.combine_tracks(
+                *data, section_folder=section_path, coaster_name=coaster_name)
+            self.track_stats = {name: {"type": d["section_type"], **d["stats"]} for name, d in track_data.items()}
+            self.checks = {name: d["checks"] for name, d in track_data.items()}
 
-            # self.update_recommendations()                       # Update slider recommendation (TODO - implement later)
-            self.update_visual(section_folder, combined_track, xy_composition)  # Update the visualization panel
-
-            QMessageBox.information(self, "Success", f"Assembly Complete!\nCSV file generated: {coaster_name}")
+            warnings = self.process_physics_checks(self.checks)
+            self.update_visual(folders["images"], combined_track, xy_composition)
 
         except Exception as e:
-            if 'wait' in locals() and wait.isVisible():
-                wait.close()
+            wait.close()
             QMessageBox.critical(self, "Assembly Error", f"An error occurred during assembly: {str(e)}")
+            return
+
+        wait.close()
+
+        if warnings:
+            warning_msg = "The track was built, but failed the following physics checks:\n\n" + "\n".join(warnings)
+            QMessageBox.warning(self, "Physics Warning", warning_msg)
+
+        QMessageBox.information(self, "Success", f"Assembly Complete!\nCSV file generated: {coaster_name}")
 
 
 if __name__ == "__main__":

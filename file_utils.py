@@ -1,12 +1,28 @@
 import os
 import shutil
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
 import csv
+from contextlib import contextmanager
+from functools import lru_cache
 
-# Folder creation
-def initalize_folders(section_folder):
+_segments_dir = None   # set by initalize_folders(); write_csv saves track parts here
+
+
+# Temporarily stop write_csv from saving segments (used for test builds, e.g. recommendations)
+@contextmanager
+def no_segment_writes():
+    global _segments_dir
+    saved = _segments_dir
+    _segments_dir = None
+    try:
+        yield
+    finally:
+        _segments_dir = saved
+
+
+# Finds the absolute path of a section folder (inside the IMPETUS folder)
+def get_section_path(section_folder):
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
     cwd = os.getcwd()
@@ -20,34 +36,68 @@ def initalize_folders(section_folder):
         if os.path.basename(base_dir) != "IMPETUS":
             base_dir = cwd
 
-    master_folder = os.path.join(base_dir, section_folder)
+    return os.path.join(base_dir, section_folder)
 
-    subfolders = {
+
+# True if this section already has a coaster with this name
+def build_exists(section_folder, coaster_name):
+    coaster_file = os.path.join(get_section_path(section_folder), "Coasters", f"{coaster_name}_0.csv")
+    return os.path.isfile(coaster_file)
+
+
+# Deletes a file or folder, printing (not crashing) if it can't be removed
+def _remove(path):
+    try:
+        if os.path.isfile(path) or os.path.islink(path):
+            os.unlink(path)
+        elif os.path.isdir(path):
+            shutil.rmtree(path)
+    except Exception as e:
+        print(f"Failed to delete {path}. Reason: {e}")
+
+
+# Folder creation. Each coaster in a section gets its own files:
+#   <section>/Coasters/<coaster>_0.csv
+#   <section>/Images/<coaster>/...
+#   <section>/Segments/<coaster>/...
+# Only THIS coaster's old files are cleared, so other coasters in the same section are kept.
+# Returns a dict of the folders: "master", "coaster", "images", "segments"
+def initalize_folders(section_folder, coaster_name):
+    global _segments_dir
+    master_folder = get_section_path(section_folder)
+
+    folders = {
         "master": master_folder,
-        "images": os.path.join(master_folder, "Images"),
         "coaster": os.path.join(master_folder, "Coasters"),
+        "images": os.path.join(master_folder, "Images", coaster_name),
+        "segments": os.path.join(master_folder, "Segments", coaster_name),
     }
 
-    for folder in subfolders.values():
-        if os.path.exists(folder):
-            for filename in os.listdir(folder):
-                file_path = os.path.join(folder, filename)
-                try:
-                    if os.path.isfile(file_path) or os.path.islink(file_path):
-                        os.unlink(file_path)
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
-                except Exception as e:
-                    print(f"Failed to delete {file_path}. Reason: {e}")
-        else:
-            os.makedirs(folder, exist_ok=True)
+    # Clear the previous build of this coaster only
+    _remove(folders["images"])
+    _remove(folders["segments"])
+    _remove(os.path.join(folders["coaster"], f"{coaster_name}_0.csv"))
+
+    for folder in folders.values():
+        os.makedirs(folder, exist_ok=True)
+
+    _segments_dir = folders["segments"]
+    return folders
 
 
 # All functions HERE has to do with file manipulation.
 # ========================================================================
 #                           Read from .csv files
 # ========================================================================
+# Each prebuilt file is read from disk only once (the recommendations build the same
+# track many times). Callers get their own copy, so changing it can't change the cache.
 def read_csv(file_name):
+    data = _read_csv_cached(file_name)
+    return None if data is None else data.copy()
+
+
+@lru_cache(maxsize=None)
+def _read_csv_cached(file_name):
     all_data = []
     try:
         with open(f"Prebuilt_tracks/{file_name}", "r", newline="", encoding="utf-8") as csvfile:
@@ -87,7 +137,9 @@ def read_csv(file_name):
         print(f"Error reading file: {e}")
         return None
 
-    return np.array(all_data)
+    data = np.array(all_data)
+    data.setflags(write=False)   # the cached array must never be changed
+    return data
 
 
 # ========================================================================
@@ -96,7 +148,9 @@ def read_csv(file_name):
 # Gets the data, points, track properties (length, height, radius), and track name and convert it into a csv
 def write_csv(data, pts, prop, elementname):
     # Make the filename for CSV (function_Length_Index)
-    file_name = f"Segments/{elementname}_{prop}.csv"
+    if _segments_dir is None:
+        return None   # no section folder yet (e.g. running tracks.py on its own)
+    file_name = os.path.join(_segments_dir, f"{elementname}_{prop}.csv")
     # Open the file and write the following into it
     with open(file_name, mode="w", newline="") as f:
         writer = csv.writer(f)
@@ -110,13 +164,12 @@ def write_csv(data, pts, prop, elementname):
 # ========================================================================
 #                           Generate .svg files
 # ========================================================================
-def export_layouts(section_folder, track_data, xy_composition, track_plots):
+def export_layouts(images_folder, track_data, xy_composition, track_plots):
     X, Y, Z, *unused_data = track_data
     font_size, cushion = 8, 5
 
     x_min_top, x_max_top = np.min(X), np.max(X)
     z_min_top, z_max_top = np.min(Z), np.max(Z)
-    top_view_x_span = x_max_top - x_min_top
     top_view_y_span = z_max_top - z_min_top
 
     # Used to find the boundaries of each segment
@@ -135,14 +188,14 @@ def export_layouts(section_folder, track_data, xy_composition, track_plots):
     combined_view(axes, combined_configs, xy_composition, segment_boundaries, X, Z)
 
     # 3. Export standalone views with temporary context decorations
-    export_individual_views(section_folder, track_plots, segment_boundaries, font_size)
+    export_individual_views(images_folder, track_plots, segment_boundaries, font_size)
 
     # 4. Format combined axes, split if necessary, and save print layout components
-    export_printed_pieces(section_folder, axes, combined_configs, xy_composition, X, Z, cushion, top_view_y_span, x_min_top, x_max_top, z_min_top, z_max_top)
+    export_printed_pieces(images_folder, axes, combined_configs, xy_composition, X, Z, cushion, top_view_y_span, x_min_top, x_max_top, z_min_top, z_max_top)
 
     # Final combined save
     fig.subplots_adjust(left=1.0/24.0, right=1.0-(1.0/24.0), bottom=1.0/12.0, top=1.0-(1.0/12.0))
-    fig.savefig(f"{section_folder}/Images/combined_track_views.svg", dpi=300)
+    fig.savefig(f"{images_folder}/combined_track_views.svg", dpi=300)
     plt.close(fig)
 
 
@@ -207,7 +260,7 @@ def combined_view(axes, combined_configs, xy_composition, segment_boundaries, X,
         current_horizontal_offset = global_2d_horizontal[-1]
 
 
-def export_individual_views(section_folder, track_plots, segment_boundaries, font_size):
+def export_individual_views(images_folder, track_plots, segment_boundaries, font_size):
     """Decorates, saves, and reverts isolated view plots from track_plots dict."""
     view_configs = [
         ("whole_track_topview",  "Whole Track Topview"),
@@ -224,10 +277,10 @@ def export_individual_views(section_folder, track_plots, segment_boundaries, fon
         ax = track_plots[key]["ax"]
         filename = f"{title.lower().replace(' ', '_')}.svg"
         temp_elements = []
+        y_min, y_max = ax.get_ylim()   # restored after saving (the sideview changes it)
 
         # If its the whole track sideview, plot with guidelines below the track
         if key == "whole_track_sideview":
-            y_min, y_max = ax.get_ylim()
             padding = (y_max - y_min) * 0.8
             new_y_min = y_min - padding
             ax.set_ylim(bottom=new_y_min)
@@ -256,25 +309,69 @@ def export_individual_views(section_folder, track_plots, segment_boundaries, fon
 
         ax.axis('off')
         ax.set_title(title, fontsize=font_size)
-        ax.figure.savefig(f"{section_folder}/Images/{filename}", dpi=300)
+        ax.figure.savefig(f"{images_folder}/{filename}", dpi=300)
         ax.axis('on')
 
         # Clean up temporary layout lines
         for element in temp_elements:
             element.remove()
         if key == "whole_track_sideview":
-            try:
-                ax.set_ylim(y_min, y_max)
-            except NameError:
-                pass
+            ax.set_ylim(y_min, y_max)
 
 
-def export_printed_pieces(section_folder, axes, combined_configs, xy_composition, X, Z, cushion, top_view_y_span, x_min_top, x_max_top, z_min_top, z_max_top):
+# Builds the greek key (square wave) along the bottom of a printed piece:
+#   gap, tooth, gap, tooth, ...   each gap/tooth is `step` wide and `tooth_height` tall.
+# The length is rounded UP to whole steps so every tooth is full size (0.5 in).
+# The key starts AND ends on the baseline, so the bound lines connect to it.
+# Returns (xs, ys, x_end) where x_end is where the right bound line goes.
+def _greek_key(x_start, x_end, y_base, step, tooth_height):
+    n_steps = max(1, int(np.ceil((x_end - x_start) / step - 1e-9)))
+    x_end = x_start + n_steps * step
+    y_top = y_base + tooth_height
+
+    xs, ys = [x_start], [y_base]
+    for i in range(n_steps):
+        x0, x1 = x_start + i * step, x_start + (i + 1) * step
+        if i % 2 == 1:   # tooth: up, across, down
+            xs += [x0, x1, x1]
+            ys += [y_top, y_top, y_base]
+        else:            # gap: along the baseline
+            xs.append(x1)
+            ys.append(y_base)
+    return xs, ys, x_end
+
+
+# Copies a line from the combined view onto a printed piece.
+# If lo/hi are given, only the part of the line inside [lo, hi] is copied (moved left by `shift`),
+# drawn as separate runs so a cut line never gets joined across a gap.
+def _copy_line(ax, line, lo=None, hi=None, shift=0.0):
+    lx = np.asarray(line.get_xdata(), dtype=float)
+    ly = np.asarray(line.get_ydata(), dtype=float)
+    style = dict(color=line.get_color(), linewidth=line.get_linewidth(), linestyle=line.get_linestyle(),
+                 marker=line.get_marker(), markersize=line.get_markersize())
+    if lo is None:
+        ax.plot(lx, ly, **style)
+        return
+
+    inside = (lx >= lo) & (lx <= hi)
+    if not np.any(inside):
+        return
+    edges = np.flatnonzero(np.diff(inside.astype(int))) + 1
+    for run in np.split(np.arange(len(lx)), edges):
+        if inside[run[0]]:
+            ax.plot(lx[run] - shift, ly[run], **style)
+
+
+def export_printed_pieces(images_folder, axes, combined_configs, xy_composition, X, Z, cushion, top_view_y_span, x_min_top, x_max_top, z_min_top, z_max_top):
     """Processes scaling, adds tooth baselines, and cuts ultra-wide plots into printable chunks."""
+    page_width_in, page_height_in = 24.0, 12.0    # Cricut mat size
+    margin_in = 1.0                               # empty border around the drawing
+    box_width_in = page_width_in - 2 * margin_in  # 22 in drawing area
+
     for ax_idx, config in enumerate(combined_configs):
         ax = axes[ax_idx]
         plot_type = config["type"]
-        
+
         if plot_type == "top":
             ax.plot(x_min_top, 0, 'go', markersize=8)
             ax.plot(x_max_top, 0, 'go', markersize=8)
@@ -285,7 +382,7 @@ def export_printed_pieces(section_folder, axes, combined_configs, xy_composition
             y_base = min([np.min(l.get_ydata()) for l in lines] + [np.max(l.get_ydata()) for l in lines]) if lines else 0
             ax.set_xlim(x_min_top - cushion, x_max_top + cushion)
             ax.set_ylim(y_base - cushion, y_base + top_view_y_span + cushion)
-        
+
         ax.set_aspect('equal', adjustable='box')
         ax.axis('off')
 
@@ -296,125 +393,99 @@ def export_printed_pieces(section_folder, axes, combined_configs, xy_composition
             track_y_data.extend(line.get_ydata())
         track_x_data, track_y_data = np.array(track_x_data, dtype=float), np.array(track_y_data, dtype=float)
 
-        box_physical_width_inches = 22.0
+        # Every printed piece uses the same scale as the top view: 22 in = the top view's width
         box_data_width = float(current_xlim[1] - current_xlim[0])
-        one_inch_in_data_units = box_data_width / box_physical_width_inches
-            
+        one_inch_in_data_units = box_data_width / box_width_in
+
         t_min_x = float(np.min(track_x_data)) if track_x_data.size > 0 else 0.0
         t_max_x = float(np.max(track_x_data)) if track_x_data.size > 0 else 1.0
         actual_track_span = t_max_x - t_min_x
 
-        should_split = (plot_type != "top") and (actual_track_span > (box_physical_width_inches * one_inch_in_data_units))
-        split_passes = ["piece_A", "piece_B"] if should_split else ["full"]
-        midpoint_x = (t_min_x + t_max_x) / 2.0
-        
-        for pass_type in split_passes:
-            single_fig = plt.figure(figsize=(24, 12))
-            single_ax = single_fig.add_axes([1.0/24.0, 1.0/12.0, (24.0-2.0)/24.0, (12.0-2.0)/12.0])
-        
+        # Cut side views into as many equal pieces as needed to fit the page (leaving room for the key)
+        if plot_type == "top":
+            n_pieces = 1
+        else:
+            n_pieces = max(1, int(np.ceil(actual_track_span / (0.9 * box_data_width))))
+        piece_length = actual_track_span / n_pieces
+
+        # Greek key size and the vertical limits shared by all pieces of this view
+        step_size = 0.5 * one_inch_in_data_units      # 0.5 in wide
+        tooth_height = 0.5 * one_inch_in_data_units   # 0.5 in tall
+        lowest_point = float(np.min(track_y_data)) if track_y_data.size > 0 else 0.0
+        highest_point = float(np.max(track_y_data)) if track_y_data.size > 0 else 10.0
+        y_baseline = lowest_point - (one_inch_in_data_units * 2.0)
+        y_top_limit = highest_point + (one_inch_in_data_units * 1.5)
+
+        for piece in range(n_pieces):
+            piece_lo = t_min_x + piece * piece_length
+            piece_hi = piece_lo + piece_length
+            shift = piece_lo - t_min_x   # every piece is drawn starting at t_min_x
+
+            if plot_type == "top":
+                y_lo, y_hi = ax.get_ylim()
+                data_min_x, data_max_x = t_min_x, t_max_x
+            else:
+                # Greek key along the bottom, ending exactly on the right bound line
+                key_x, key_y, key_end_x = _greek_key(t_min_x, t_min_x + piece_length, y_baseline, step_size, tooth_height)
+                y_lo, y_hi = y_baseline - (one_inch_in_data_units * 0.5), y_top_limit
+                data_min_x, data_max_x = t_min_x, key_end_x
+
+            # Page sized so the drawing is exactly to scale (normally the 24 x 12 in mat)
+            content_height_in = (y_hi - y_lo) / one_inch_in_data_units
+            box_height_in = max(page_height_in - 2 * margin_in, content_height_in)
+            if content_height_in > page_height_in - 2 * margin_in:
+                print(f"Note: {config['title']} is {content_height_in:.1f} in tall; page made taller than {page_height_in:.0f} in to stay to scale.")
+            fig_height_in = box_height_in + 2 * margin_in
+
+            single_fig = plt.figure(figsize=(page_width_in, fig_height_in))
+            single_ax = single_fig.add_axes([margin_in / page_width_in, margin_in / fig_height_in,
+                                             box_width_in / page_width_in, box_height_in / fig_height_in])
+
             for line in ax.get_lines():
-                lx, ly = line.get_xdata(), line.get_ydata()
-                if pass_type == "piece_A":
-                    mask = lx <= midpoint_x
-                    if np.any(mask): single_ax.plot(lx[mask], ly[mask], color=line.get_color(), linewidth=line.get_linewidth())
-                elif pass_type == "piece_B":
-                    mask = lx >= midpoint_x
-                    if np.any(mask): single_ax.plot(lx[mask] - (midpoint_x - t_min_x), ly[mask], color=line.get_color(), linewidth=line.get_linewidth())
+                if n_pieces == 1:
+                    _copy_line(single_ax, line)
                 else:
-                    single_ax.plot(lx, ly, color=line.get_color(), linewidth=line.get_linewidth())
+                    _copy_line(single_ax, line, piece_lo, piece_hi, shift)
 
             if plot_type == "top":
                 dot_array_idx = 0
                 for segment in xy_composition[:-1]:
                     dot_array_idx += len(segment["XY"]) - 1
                     single_ax.plot(X[dot_array_idx], Z[dot_array_idx], color='black', marker='o', markersize=6, zorder=5)
-
-            # Add the greek keys to the sideviews
-            x_pattern, y_pattern = [], []
-            if plot_type != "top":
-                step_size = 0.5 * one_inch_in_data_units  
-                tooth_height = 0.5 * one_inch_in_data_units
-                lowest_point = float(np.min(track_y_data)) if len(track_y_data) > 0 else 0.0
-                highest_point = float(np.max(track_y_data)) if len(track_y_data) > 0 else 10.0
-                
-                y_baseline = lowest_point - (one_inch_in_data_units * 2.0)
-                y_top_limit = highest_point + (one_inch_in_data_units * 1.5)
-
-                p_min_x, p_max_x = (t_min_x, midpoint_x) if pass_type == "piece_A" else (t_min_x, t_max_x - (midpoint_x - t_min_x)) if pass_type == "piece_B" else (t_min_x, t_max_x)
-
-
-                num_cycles = int((p_max_x - p_min_x) / (step_size * 2)) + 1
-                current_x = p_min_x
-
-                x_pattern.append(current_x)
-                y_pattern.append(y_baseline)
-                for _ in range(num_cycles):
-                    tooth_top = min(y_baseline + tooth_height, -(one_inch_in_data_units * 0.2))
-                    x_pattern.extend([current_x, current_x, current_x + step_size, current_x + step_size, current_x + step_size])
-                    y_pattern.extend([tooth_top, y_baseline, y_baseline, y_baseline, tooth_top])
-                    current_x += (step_size * 2)
-                
-                single_ax.plot(np.array(x_pattern, dtype=float), np.array(y_pattern, dtype=float), color='black', linewidth=1, zorder=1)
-                # Vertical lines are the beginning and end (Used for Cricut)
-                single_ax.plot([p_min_x, p_min_x], [y_baseline, y_top_limit], color='black', linewidth=1)
-                single_ax.plot([p_max_x, p_max_x], [y_baseline, y_top_limit], color='black', linewidth=1)
-
-                if pass_type == "piece_A":
-                    single_ax.plot([midpoint_x, midpoint_x], [y_baseline, y_top_limit], color='black', linewidth=1)
-                elif pass_type == "piece_B":
-                    single_ax.plot([t_min_x, t_min_x], [y_baseline, y_top_limit], color='black', linewidth=1)
-
-                single_ax.set_ylim(y_baseline - (one_inch_in_data_units * 0.5), y_top_limit)
             else:
-                single_ax.set_ylim(ax.get_ylim())
+                single_ax.plot(key_x, key_y, color='black', linewidth=1, zorder=1)
+                # Vertical lines are the beginning and end (Used for Cricut)
+                single_ax.plot([t_min_x, t_min_x], [y_baseline, y_top_limit], color='black', linewidth=1)
+                single_ax.plot([key_end_x, key_end_x], [y_baseline, y_top_limit], color='black', linewidth=1)
 
-            data_min_x = t_min_x if pass_type in ["piece_A", "piece_B"] else np.min(track_x_data) if track_x_data.size > 0 else current_xlim[0]
-            data_max_x = midpoint_x if pass_type == "piece_A" else t_max_x - (midpoint_x - t_min_x) if pass_type == "piece_B" else np.max(track_x_data) if track_x_data.size > 0 else current_xlim[1]
-
-            if plot_type != "top" and x_pattern:
-                data_min_x, data_max_x = min(data_min_x, np.min(x_pattern)), max(data_max_x, np.max(x_pattern))
-                
+            # Exact limits: 22 in across = box_data_width and the height matches the box,
+            # so the drawing is never shrunk (1 in on paper = 1 in on the plan)
             data_mid_x = (data_min_x + data_max_x) / 2.0
-            half_width = (current_xlim[1] - current_xlim[0]) / 2.0
-            single_ax.set_xlim(data_mid_x - half_width, data_mid_x + half_width)
-            single_ax.set_aspect('equal', adjustable='box')
+            single_ax.set_xlim(data_mid_x - box_data_width / 2.0, data_mid_x + box_data_width / 2.0)
+            extra_y = (box_height_in * one_inch_in_data_units - (y_hi - y_lo)) / 2.0
+            single_ax.set_ylim(y_lo - extra_y, y_hi + extra_y)
             single_ax.axis('off')
-            
+
             safe_title = config["title"].lower().replace(' ', '_').replace('-', '_')
-            suffix = f"_{pass_type}" if should_split else ""
-            single_fig.savefig(f"{section_folder}/Images/to_print_{safe_title}{suffix}.svg", dpi=300, transparent=True, facecolor='none', pad_inches=0)
+            suffix = f"_piece_{chr(ord('A') + piece)}" if n_pieces > 1 else ""
+            single_fig.savefig(f"{images_folder}/to_print_{safe_title}{suffix}.svg", dpi=300, transparent=True, facecolor='none', pad_inches=0)
             plt.close(single_fig)
 
 # ========================================================================
 #                       NoLimits 2 Spline Format
 # ========================================================================
-# This actually works. DON'T TOUCH IT. If touch it may be broken.
+# Output format checked against NoLimits 2 -- re-test in NoLimits after any change.
 def csv_noLimits_format(data, pts, prop, elementname):
-    # NoLimits 2 spline header format
     file_name = f"{elementname}_{prop}.csv"
-    
-    # Define the precise NoLimits 2 spline header with literal tab spacing
-    header_line = '"No."\t"PosX"\t"PosY"\t"PosZ"\t"FrontX"\t"FrontY"\t"FrontZ"\t"LeftX"\t"LeftY"\t"LeftZ"\t"UpX"\t"UpY"\t"UpZ"\n'
-    
-    # Open the file and write out directly
+
+    # NoLimits 2 spline header, tab separated
+    header_line = '"No."\t"PosX"\t"PosY"\t"PosZ"\t"FrontX"\t"FrontY"\t"FrontZ"\t"LeftX"\t"LeftY"\t"LeftZ"\t"UpX"\t"UpY"\t"UpZ"'
+
+    # Index as an integer, then the 12 coordinates/vectors in scientific notation (e.g. 1.234560e+01).
+    # newline="" keeps plain \n line endings on Windows too.
     with open(file_name, mode="w", newline="", encoding="utf-8") as f:
-        # 1. Write the header line cleanly with zero backslashes
-        f.write(header_line)
-        
-        # 2. Iterate through the array slices and format each item into scientific notation
-        for row in data[:pts]:
-            # Element 0 is the index integer, the rest (1 to 12) are float coordinates/vectors
-            idx = int(row[0])
-            coords = row[1:13]
-            
-            # Convert float items to scientific notation strings (e.g., 1.234560e+01)
-            formatted_coords = [f"{float(val):e}" for val in coords]
-            
-            # Combine the integer index with the formatted float coordinates
-            line_items = [str(idx)] + formatted_coords
-            
-            # Join together with tabs and write the line
-            f.write("\t".join(line_items) + "\n")
+        np.savetxt(f, data[:pts, :13], fmt=["%d"] + ["%e"] * 12, delimiter="\t",
+                   header=header_line, comments="")
 
     print(f"file {file_name} created successfully")
     return None

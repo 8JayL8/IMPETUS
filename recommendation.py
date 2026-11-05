@@ -1,49 +1,76 @@
 # recommendation.py
 import numpy as np
+import file_utils
+import section_checks
+
 
 class EnergyRecommendation:
     """
-    Calculates dynamic track parameters based on initial exit velocity 
-    to prevent slow pacing, extreme high G-forces, or stalling.
+    Finds the recommended (lower and upper bound) slider values for every track type,
+    based on the speed coming out of the 'Starts' section.
+
+    Each slider value is tested by building that track part and running the same physics
+    checks the Create button uses (section_checks.analyze_section), so the recommended
+    range always agrees with what Create will report.
+
+    Approximation: every section is tested with the speed leaving the 'Starts' section.
+    Track parts start and end at (almost) the same height, and friction is ignored,
+    so the speed entering each later section is nearly the same.
     """
-    g = 9.8
+    _cache = {}
 
     @classmethod
-    def get_recommendations(cls, start_type, start_value):
+    def get_recommendations(cls, start_type, start_value, builders, sections, value_range=(1, 50)):
         """
-        Calculates the available exit velocity budget based on the start track parameters.
+        start_type, start_value: what the user picked in the 'Starts' section
+        builders: track type -> track part function (GUI.track_function_map)
+        sections: section name -> list of track types to recommend for, e.g. {"Turns": ["Helix", ...]}
+        Returns {"v_exit": float, section name: {track type: (min, max) or None}}
         """
-        v_exit = 0.0
-        
-        # Mirroring the calculation formulas from tracks.py
-        if start_type == "Launcher":
-            # v_exit = sqrt(2 * a * L) | Assuming constant 2.5g acceleration
-            v_exit = np.sqrt(2 * 2.5 * cls.g * start_value)
-        elif start_type == "Lift Hill":
-            v_exit = np.sqrt(2 * cls.g * start_value)
-        elif start_type == "Rollback":
-            v_exit = np.sqrt(2 * 1.5 * cls.g * start_value)
-            
-        total_energy_height = (v_exit ** 2) / (2 * cls.g)
-        
-        # Target a comfortable apex velocity range of 5 m/s to 12 m/s for solid pacing
-        v_target_low = 5.0
-        v_target_high = 12.0
-        
-        # Heights corresponding to these target speeds
-        h_target_max = total_energy_height - (v_target_low ** 2) / (2 * cls.g)
-        h_target_min = total_energy_height - (v_target_high ** 2) / (2 * cls.g)
-        
-        # Guard against negative heights
-        h_target_min = max(2.0, h_target_min)
-        h_target_max = max(5.0, h_target_max)
+        key = (start_type, float(start_value), tuple((s, tuple(t)) for s, t in sections.items()), value_range)
+        if key in cls._cache:
+            return cls._cache[key]
 
-        return {
-            "v_exit": v_exit,
-            "max_energy_height": total_energy_height,
-            "Camelback": (round(h_target_min, 1), round(h_target_max, 1)),
-            "Loop": (round(h_target_min / 1.5, 1), round(h_target_max / 1.5, 1)), # Loops have distinct dynamic constraints
-            "Corkscrew": (round(h_target_min / 4.0, 1), round(h_target_max / 4.0, 1)), # Section scaling has H = h * 4
-            "Cobral Roll": (round(h_target_min, 1), round(h_target_max, 1)),
-            "Helix": (round(h_target_min / 2.0, 1), round(h_target_max / 2.0, 1)) # R = 2 * h geometry rule
-        }
+        # Test builds must not save files into the section's Segments folder
+        with file_utils.no_segment_writes():
+            _, raw_v = builders[start_type](float(start_value))
+            v_exit = float(np.ravel(raw_v)[0])
+
+            recs = {"v_exit": v_exit}
+            tested = {}   # Thrills 1 and Thrills 2 use the same tracks, so only test each once
+            for section_name, track_types in sections.items():
+                recs[section_name] = {}
+                for track_type in track_types:
+                    test_key = (section_name == "Ends", track_type)
+                    if test_key not in tested:
+                        tested[test_key] = cls._safe_range(builders[track_type], section_name, track_type, v_exit, value_range)
+                    recs[section_name][track_type] = tested[test_key]
+
+        cls._cache[key] = recs
+        return recs
+
+    @staticmethod
+    def _safe_range(build, section_name, track_type, v_entry, value_range):
+        """Largest continuous range of slider values where every physics check passes, or None."""
+        best = None
+        run_start = None
+        low, high = value_range
+
+        for value in range(low, high + 2):   # one extra step closes a run that reaches 'high'
+            passed = False
+            if value <= high:
+                try:
+                    _, checks, _ = section_checks.analyze_section(section_name, track_type, build(float(value)), v_entry)
+                    passed = all(check is not False for check in checks.values())
+                except Exception:
+                    passed = False
+
+            if passed and run_start is None:
+                run_start = value
+            elif not passed and run_start is not None:
+                run = (run_start, value - 1)
+                if best is None or (run[1] - run[0]) > (best[1] - best[0]):
+                    best = run
+                run_start = None
+
+        return best
