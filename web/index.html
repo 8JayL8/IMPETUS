@@ -28,6 +28,7 @@
   </header>
 
   <main>
+    <!-- Control Panel For Physics Section (Toggling of frection and air resistance) -->
     <aside id="sections" aria-label="Track sections">
       <div class="card physics-card">
         <div class="card-head"><span class="card-name">Physics</span></div>
@@ -36,6 +37,7 @@
           <button type="button" id="air-btn" class="physics-toggle" aria-pressed="false">Air resistance: Off</button>
         </div>
 
+        <!-- Friction Control Field (Hidden till toggled ON) -->
         <div id="friction-fields" class="physics-fields" hidden>
           <label title="Friction force = μ × the force pressing the wheels onto the track">
             Rolling friction μ <input type="number" id="mu-input" step="0.001">
@@ -43,6 +45,7 @@
           <button type="button" class="link-btn" id="friction-reset">Reset to default</button>
         </div>
 
+        <!-- Air Resistance Control Field (Hidden till toogled ON) -->
         <div id="air-fields" class="physics-fields" hidden>
           <label title="Drag force = ½ × air density × Cd × area × v²">
             Drag coefficient C<sub>d</sub> <input type="number" id="cd-input" step="0.05">
@@ -52,23 +55,29 @@
           <button type="button" class="link-btn" id="air-reset">Reset to defaults</button>
         </div>
 
+        <!-- Displays Physics Summary (Friction Force, Air Drag) -->
         <div id="physics-summary" class="physics-summary"></div>
       </div>
     </aside>
-    <div class="splitter splitter-v" id="split-left" role="separator" aria-orientation="vertical"
-         title="Drag to resize · drag closed to hide · double-click to hide/show"></div>
 
+    <!-- Used to resize left bar (Whole Left Control Panel) -->
+    <div class="splitter splitter-v" id="split-left" role="separator" aria-orientation="vertical"
+         title="Drag to resize · Drag closed to hide · Double-click to hide/show"></div>
+
+    <!-- Controls View Experience -->
     <section class="views">
       <div id="view3d" class="panel view3d">
         <span class="panel-title">3D View</span>
         <div class="ride-controls">
           <button id="ride-btn" type="button" class="primary">▶ Start</button>
           <button id="ride-reset" type="button" title="Back to the station">⏮</button>
+
           <select id="ride-speed" title="Playback speed">
             <option value="0.5">0.5×</option>
             <option value="1" selected>1×</option>
             <option value="2">2×</option>
             <option value="4">4×</option>
+
           </select>
           <select id="cam-mode" title="Camera mode">
             <option value="orbit" selected>Camera: Orbit</option>
@@ -76,23 +85,32 @@
             <option value="ride">Camera: Ride</option>
           </select>
         </div>
+
+        <!-- Free Cam Control Description (Hidden till toggled ON) -->
         <div id="cam-hint" class="cam-hint" hidden>
           Drag to look · <b>W A S D</b> move · <b>E</b>/<b>Space</b> up · <b>Q</b>/<b>C</b> down ·
           <b>Shift</b> faster · <b>Wheel</b> fly speed (<span id="cam-speed"></span>)
         </div>
+
+        <!-- Displays the current speed, track section, and track part -->
         <div class="hud">
           <div id="hud-speed" class="hud-speed">0 km/h</div>
           <div id="hud-section" class="hud-section"></div>
           <div id="hud-note" class="hud-note"></div>
         </div>
       </div>
+
+      <!-- Used to resize bottom bar (2D View of the track) -->
       <div class="splitter splitter-h" id="split-bottom" role="separator" aria-orientation="horizontal"
            title="Drag to resize · drag closed to hide · double-click to hide/show"></div>
+      
+      <!-- Displays the side vide and top view of the track -->
       <div class="panel-row">
         <div class="panel">
           <span class="panel-title">Side View (distance vs height)</span>
           <canvas id="profile"></canvas>
         </div>
+
         <div class="panel">
           <span class="panel-title">Top View</span>
           <canvas id="topview"></canvas>
@@ -101,6 +119,7 @@
     </section>
   </main>
 
+  <!-- When exporting asks user for section name and coaster name -->
   <dialog id="export-dialog">
     <form method="dialog" id="export-form">
       <h2>Export coaster</h2>
@@ -115,6 +134,7 @@
     </form>
   </dialog>
 
+  <!-- Template style for track section -->
   <template id="section-template">
     <div class="card">
       <div class="card-head">
@@ -138,6 +158,6 @@
     </div>
   </template>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/js/main.js"></script>
 </body>
 </html>
