@@ -52,7 +52,8 @@ class TrackPart:
     @staticmethod
     def lifthill_func(h):
         # h is the max height
-        track_content = _load_prebuilt("cometlifthill.csv", h, 1, "lifthill")
+        # tidy: the file's track ends still sloping down ~1 degree; make it end level (no kink into the next section)
+        track_content = _load_prebuilt("cometlifthill.csv", h, 1, "lifthill", tidy=True)
         max_y = np.max(track_content[1])
         v_exit = np.sqrt(2 * G * max_y)
         return track_content, v_exit
@@ -95,7 +96,9 @@ class TrackPart:
     # Camelback track part (done)
     @staticmethod
     def camelback_func(h):
-        return _load_prebuilt("cometcamelback.csv", h, 1 / 3, "camelback")
+        # The file's descent is cut short (13 m shorter than the climb, still sloping down when it ends),
+        # which made a tighter dip and a kink into the next section. Use the climb mirrored as the descent.
+        return _load_prebuilt("cometcamelback.csv", h, 1 / 3, "camelback", tidy=True, mirror=True)
 
     # Corkscrew track part (done)
     @staticmethod
@@ -213,7 +216,10 @@ class TrackPart:
     #     1. Half loop: an Euler spiral (clothoid). Its curvature grows steadily from 0 (so it starts
     #        smoothly from flat track) up to 1/r_top at the top, where the train is upside-down heading -X.
     #     2. Half corkscrew: dives and turns 90 degrees (heading -X -> -Z) down to the "neck",
-    #        rolling back upright. It starts with the same curvature as the top of the half loop (no jolt).
+    #        rolling back upright. It starts with the same curvature as the top of the half loop (no jolt),
+    #        and pulls out of the dive into the neck on a radius neck_radius times the top radius.
+    #        (The train is fastest at the neck: when the neck was as tight as the top, riders felt
+    #        over 5 g there at every size.)
     #   Second half: the first half mirrored about the neck and run backwards, so the two halves meet
     #   smoothly at the neck and the exit heads -X.
     @staticmethod
@@ -223,10 +229,11 @@ class TrackPart:
         # return _load_prebuilt("flashbackcobraroll.csv", h, 3, "cobrarollCG")
 
         neck_fraction = 0.35   # neck height as a fraction of the top height
+        neck_radius = 2.0      # radius of the dip at the neck, as a multiple of the top radius
         step = 0.3             # point spacing (m)
 
         # Shape with a top radius of 1 (the same for every h, so it is worked out once and reused)
-        P_loop, T_loop, loop_length, P_cork, T_cork, cork_length = _cobra_unit_shape(neck_fraction)
+        P_loop, T_loop, loop_length, P_cork, T_cork, cork_length = _cobra_unit_shape(neck_fraction, neck_radius)
         top_height = P_loop[-1, 1]
         n_fine = len(P_loop)
 

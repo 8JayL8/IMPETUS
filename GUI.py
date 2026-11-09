@@ -50,6 +50,7 @@ CONTROL = {
 # Physics check -> warning shown when that check fails
 CHECK_WARNINGS = {
     "velocity_check": "Not enough velocity to get through this section.",
+    "max_g_check": "Riders feel 5Gs or more somewhere in this section.",
     "valley_check": "Valley G-force exceeds 5Gs.",
     "inversion_check": "Too slow or too fast to clear the inversion peak.",
     "peak_check": "Speed too high over crest (Airborne).",

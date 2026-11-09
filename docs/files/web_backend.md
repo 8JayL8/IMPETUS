@@ -41,7 +41,8 @@ It validates input from the browser, builds the coaster, and converts NumPy resu
 | `_build(...)` | Calls each builder, then `tracks.TrackPart.combine_tracks`; also computes ride speeds |
 | `_start_speeds(part, losses)` | Speed along the `Starts` element (launch acceleration, chain lift, or drop) |
 | `_ride_speeds(...)` | Speed at every point of the whole track for the ride animation; `NaN` after a stall |
-| `_to_json(...)` | Packs track arrays (`X Y Z Nx Ny Nz V`), per-section stats/checks/warnings, and the side profile |
+| `_seat_forces(combined, speeds)` | Seat (normal) force in g at every point of the joined track, using `physics.rider_forces` with the ride speeds |
+| `_to_json(...)` | Packs track arrays (`X Y Z Nx Ny Nz V G`), per-section stats/checks/warnings, and the side profile |
 | `_num`, `_arr` | NumPy → JSON-safe numbers / rounded lists (NaN/inf → `null`/0) |
 
 ## `BuildError`
@@ -50,7 +51,9 @@ A `ValueError` subclass for user mistakes. `server.py` turns it into HTTP 400 an
 ## Response shape of `preview` / `export`
 ```jsonc
 {
-  "track":   { "X": [...], "Y": [...], "Z": [...], "Nx": [...], "Ny": [...], "Nz": [...], "V": [...] },
+  "track":   { "X": [...], "Y": [...], "Z": [...], "Nx": [...], "Ny": [...], "Nz": [...],
+              "V": [...],      // ride speed at every point (m/s), null after a stall
+              "G": [...] },    // seat (normal) force at every point (g), null after a stall
   "losses":  null | { "mu": 0.015, "k_air": 0.0004 },
   "sections": [ { "section", "type", "value", "points", "stats", "checks", "warnings", "passed" } ],
   "profile": [ { "section", "type", "XY": [...], "Z": [...] } ],

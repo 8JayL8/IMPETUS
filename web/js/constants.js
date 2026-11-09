@@ -36,6 +36,7 @@ export const STAT_LABELS = {
   // the forces the checks used, so they can be worked out by hand
   g_top: ["Force at top (v²/gr − 1)", "g"],
   g_min: ["Lowest seat force", "g"],
+  g_max: ["Highest seat force", "g"],
   g_valley: ["Valley force", "g"],
   valley_ny: ["Valley n_y", ""],
   g_lateral: ["Worst sideways force", "g"],

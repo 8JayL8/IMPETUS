@@ -142,17 +142,44 @@ function buildSupports(group, track, frames, groundY, span) {
   group.add(colMesh, footMesh);
 }
 
-// Track normals (same red lines as the desktop app's 3D view)
+// ===== Normal force: how hard riders are pushed into their seats =====
+// A line along the track's up direction at every point. Its length is the force in g (track.G from the
+// server): 1 g (sitting still) is the base length, 3 g is three times as long, and below 0 g (riders
+// lifted out of their seats) the line points the other way. Colours follow the physics check limits.
+// No line where the train has stopped (no speed, so no force).
+export const G_BANDS = [   // [below this g, colour, legend text]
+  [0, "#3b82f6", "< 0 g (lifted out of seat)"],
+  [2, "#16a34a", "0 – 2 g"],
+  [4, "#eab308", "2 – 4 g"],
+  [5, "#f97316", "4 – 5 g"],
+  [Infinity, "#dc2626", "≥ 5 g (over the valley limit)"],
+];
+const bandColors = G_BANDS.map(([, hex]) => new THREE.Color(hex));
+const colorForG = (g) => bandColors[G_BANDS.findIndex(([below]) => g < below)];
+
 function buildNormals(group, track, span) {
-  const verts = [];
-  const len = span * 0.012;   // normal line length
+  const verts = [], colors = [];
+  const perG = span * 0.012;   // line length for 1 g
+  // Some parts (e.g. the loop) have points very close together: draw at most one line per `spacing`
+  // metres along the track so the lines don't merge into a solid sheet
+  const spacing = Math.max(0.5, perG * 0.4);
+  let sinceLast = Infinity;
   for (let i = 0; i < track.X.length; i++) {
+    if (i > 0) sinceLast += Math.hypot(track.X[i] - track.X[i - 1], track.Y[i] - track.Y[i - 1], track.Z[i] - track.Z[i - 1]);
+    const g = track.G?.[i];
+    if (g === null || g === undefined || sinceLast < spacing) continue;
+    sinceLast = 0;
+    const len = g * perG;
     verts.push(track.X[i], track.Y[i], track.Z[i],
       track.X[i] + track.Nx[i] * len, track.Y[i] + track.Ny[i] * len, track.Z[i] + track.Nz[i] * len);
+    const c = colorForG(g);
+    colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
   }
+  if (!verts.length) return;
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
-  group.add(new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color: "#ef4444", transparent: true, opacity: 0.5 })));
+  geom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  group.add(new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85 })));
 }
 
 export function render3D(result) {
@@ -178,7 +205,9 @@ export function render3D(result) {
 
   // Support columns down to the ground
   if (document.getElementById("show-supports").checked) buildSupports(trackGroup, track, frames, groundY, span);
-  if (document.getElementById("show-normals").checked) buildNormals(trackGroup, track, span);
+  const showForces = document.getElementById("show-normals").checked;
+  if (showForces) buildNormals(trackGroup, track, span);
+  document.getElementById("g-legend").hidden = !showForces;
 
   // Start area, end (only when the track doesn't return to the station), direction arrows
   addStartMarker(trackGroup, track, radius, span, groundY);

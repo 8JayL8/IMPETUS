@@ -26,6 +26,7 @@ def empty_section_data(section_type):
         # Forces the checks used, in g (so they can be checked by hand)
         "g_top": None,          # inversion: v_top^2 / (g * r_top) - 1
         "g_min": None,          # lowest seat force in the section (inversions / crests)
+        "g_max": None,          # highest seat force anywhere in the section (must stay under 5 g)
         "g_valley": None,       # valley: (g * n_y + v_bottom^2 / r_bottom) / g
         "valley_ny": None,      # n_y used by the valley (1 = the dip curves straight up)
         "g_lateral": None,      # turns: worst sideways force
@@ -40,6 +41,7 @@ def empty_section_data(section_type):
 
     checks = {
         "velocity_check": False,
+        "max_g_check": None,
         "valley_check": None,
         "inversion_check": None,
         "peak_check": None,
@@ -123,6 +125,9 @@ def analyze_section(section_name, section_type, arrays, v_entry, losses=None):
 
     # Forces on the riders at every point (in g)
     seat_g, lateral_g = physics.rider_forces(geometry, velocities)
+
+    # === Highest force anywhere in the section (every track type) ===
+    checks["max_g_check"], stats["g_max"] = physics.max_g_check(seat_g)
 
     # Top of the section
     peak_idx = int(np.argmax(Y))

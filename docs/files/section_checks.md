@@ -18,7 +18,9 @@ worst lateral point …) the numbers come from. The formulas themselves are in [
 | `LATERAL_CHECKS` | Horseshoe, Helix |
 | (special cases) | Rollup → `rollup_check`, Brake → `brake_check` |
 
-Every section also gets `velocity_check` (the train must make it through).
+Every section also gets `velocity_check` (the train must make it through) and `max_g_check`
+(riders feel under 5 g at **every** point, not just the lowest dip; added because tight bends higher up,
+like the neck of a cobra roll, could go over 5 g without failing anything).
 
 ## Functions
 
@@ -33,7 +35,7 @@ Every section also gets `velocity_check` (the train must make it through).
 1. `physics.track_geometry` → curvature radius, tangent, normals.
 2. `physics.calculate_velocity` → speed at every point (brakes add 1.5 g deceleration).
 3. `velocity_check` — in `Ends` stopping is allowed; it only fails if the train never arrives. Elsewhere a stall → exit speed 0.
-4. `physics.rider_forces` → seat (vertical) and lateral g at every point.
+4. `physics.rider_forces` → seat (vertical) and lateral g at every point; `max_g_check` on the highest seat force (`g_max`).
 5. Valley: `physics.find_valley` + `valley_check` (< 5 g).
 6. Inversion: `inversion_check` at the top + `inversion_seat_check` everywhere upside-down.
 7. Peak: `airtime_check` (no negative g on a crest).
@@ -44,5 +46,5 @@ A check value of `True` = pass, `False` = fail, `None` = not applicable. Front e
 
 ## Stats keys
 `acceleration`, `velocity_exit`, `velocities` (array), `v_top`, `v_bottom`, `radius` (array), `r_top`,
-`r_bottom`, `deg_banking`, `deg_top`, `deg_bottom`, `g_top`, `g_min`, `g_valley`, `valley_ny`,
+`r_bottom`, `deg_banking`, `deg_top`, `deg_bottom`, `g_top`, `g_min`, `g_max`, `g_valley`, `valley_ny`,
 `g_lateral`, `v_lateral`, `r_lateral`.

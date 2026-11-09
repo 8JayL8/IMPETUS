@@ -30,7 +30,7 @@ smooth ramps, shape pieces, and saving/loading track parts.
 | `_smooth_ramp(y_end, slope_end, length, pts)` | Ramp from flat ground to a given height and slope |
 | `_min_radius_xy(X, Y)` | Tightest radius of a 2D curve |
 | `_gentle_ramp(y_end, slope_end, target_radius)` | Ramp whose tightest radius is about `target_radius` (corkscrew lead-in) |
-| `_cobra_unit_shape(neck_fraction, n_fine)` | Cobra roll half-shape at top radius 1 (cached with `lru_cache`, then scaled) |
+| `_cobra_unit_shape(neck_fraction, neck_radius, n_fine)` | Cobra roll half-shape at top radius 1 (cached with `lru_cache`, then scaled). `neck_radius` = neck dip radius ÷ top radius |
 
 ## Building / saving a part
 
@@ -38,6 +38,8 @@ smooth ramps, shape pieces, and saving/loading track parts.
 |---|---|
 | `_finish(file_name, prop, X…Nz)` | Write the segment CSV via `file_utils.write_csv`, return the 13-tuple |
 | `_build(file_name, prop, X, Y, Z, Nx, Ny, Nz)` | Same, but works out Front and Left vectors first |
-| `_load_prebuilt(csv_name, h, x_stretch, file_name)` | Read `Prebuilt_tracks/<csv_name>`, scale so max height = h, stretch X, save segment |
+| `_load_prebuilt(csv_name, h, x_stretch, file_name, tidy, mirror)` | Read `Prebuilt_tracks/<csv_name>`, scale so max height = h, stretch X, save segment. `tidy=True`: level the ends and recompute front / up vectors from the final shape; `mirror=True`: make it symmetric about its crest |
+| `_mirror_about_crest(X, Y)` | Replace the second half of a flat track with a mirror image of the first half |
+| `_level_ends(X, Y, blend)` | Bend the first / last `blend` metres slightly so the track starts and ends exactly level (no kink into the next section) |
 
 `write_csv` only writes if a segments folder is set (during an export / GUI build); otherwise it does nothing.

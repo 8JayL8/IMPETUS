@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { api, setStatus } from "./api.js";
 import { state } from "./state.js";
 import { renderer, scene, camera, view3d, resize3D } from "./scene.js";
-import { fitCamera } from "./track3d.js";
+import { fitCamera, G_BANDS } from "./track3d.js";
 import { stepRide } from "./ride.js";
 import { setCameraMode, updateCamera } from "./cameras.js";
 import { drawProfile, drawTopView } from "./views2d.js";
@@ -33,6 +33,15 @@ viewsObserver.observe(view3d);   // also redraw when the bottom panel is dragged
 
 setupSplitters();
 setupExportDialog();
+
+// ===== Normal force legend (same colours as the lines) =====
+for (const [, color, text] of G_BANDS) {
+  const li = document.createElement("li");
+  const swatch = document.createElement("span");
+  swatch.style.setProperty("--swatch", color);
+  li.append(swatch, text);
+  document.getElementById("g-legend-items").appendChild(li);
+}
 
 // ===== Header buttons =====
 // Fit view always goes back to the orbit camera

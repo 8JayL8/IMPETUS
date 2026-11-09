@@ -105,6 +105,27 @@ def _lan_ip():
         return "<this computer's IP>"
 
 
+# On Windows, uvicorn stops each worker with os.kill(pid, CTRL_BREAK_EVENT). The worker isn't in its
+# own console process group, so Windows sends that Ctrl+Break to every program in the terminal,
+# including PowerShell, which then drops into its debugger ("Entering debug mode").
+# The workers already get the Ctrl+C you pressed and shut down on their own, so this stops any
+# that are still running directly instead.
+def _fix_windows_worker_shutdown():
+    if os.name != "nt":
+        return
+    from uvicorn.supervisors import multiprocess
+    if not hasattr(multiprocess, "Process"):   # a uvicorn version that works differently: leave it
+        return
+
+    def terminate(self):
+        if self.process.exitcode is None:
+            self.process.terminate()   # TerminateProcess: only this worker, nothing else
+        self.parent_conn.close()
+        self.child_conn.close()
+
+    multiprocess.Process.terminate = terminate
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -124,6 +145,9 @@ if __name__ == "__main__":
         print(f"Other devices on the network:      http://{_lan_ip()}:{args.port}")
         print("(If they can't connect, allow Python through Windows Firewall on private networks.)")
     print(f"Worker processes: {workers}")
+
+    if workers > 1:
+        _fix_windows_worker_shutdown()
 
     # "server:app" (not app) so uvicorn can start several worker processes
     uvicorn.run("server:app", host=host, port=args.port, workers=workers,

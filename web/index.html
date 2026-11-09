@@ -20,7 +20,7 @@
     <span id="status" class="status">Loading…</span>
     <div class="header-actions">
       <label class="toggle"><input type="checkbox" id="show-direction" checked> Direction</label>
-      <label class="toggle"><input type="checkbox" id="show-normals"> Normals</label>
+      <label class="toggle" title="Lines show how hard riders are pushed into their seats (length = g-force)"><input type="checkbox" id="show-normals"> Normal force</label>
       <label class="toggle"><input type="checkbox" id="show-supports" checked> Supports</label>
       <button id="fit-btn" type="button">Fit view</button>
       <button id="export-btn" type="button" class="primary">Export CSV</button>
@@ -90,6 +90,13 @@
         <div id="cam-hint" class="cam-hint" hidden>
           Drag to look · <b>W A S D</b> move · <b>E</b>/<b>Space</b> up · <b>Q</b>/<b>C</b> down ·
           <b>Shift</b> faster · <b>Wheel</b> fly speed (<span id="cam-speed"></span>)
+        </div>
+
+        <!-- Legend for the normal force lines (shown when "Normal force" is ticked) -->
+        <div id="g-legend" class="g-legend" hidden>
+          <div class="g-legend-title">Normal force on riders</div>
+          <div class="g-legend-note">Line length = g felt (1 g = sitting still)</div>
+          <ul id="g-legend-items"></ul>
         </div>
 
         <!-- Displays the current speed, track section, and track part -->

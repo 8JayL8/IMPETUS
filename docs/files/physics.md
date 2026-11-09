@@ -40,6 +40,7 @@ Pure maths, no track-type knowledge. Units are SI (m, m/s, kg); g-forces are in 
 | `inversion_check(v_top, r_top)` | At the top: `v²/(g·r) − 1 ≤ 3 g` and `v ≥ √(g·r)` |
 | `inversion_seat_check(seat_g, N_y)` | Seat force ≥ 0 g everywhere the rider is upside down |
 | `peak_check(v, r)` | Older single-point crest check (not currently called; `airtime_check` replaced it) |
+| `max_g_check(seat_g)` | Seat force < 5 g (`MAX_SEAT_G`) at every point of the section |
 | `airtime_check(seat_g)` | Seat force ≥ 0 g on the whole crest |
 | `lateral_section_check(lateral_g)` | `abs(lateral) ≤ 1.5 g` everywhere → also returns the worst index |
 | `lateral_check(v, r, θ)` | Older single-point banked-turn formula (not currently called; `lateral_section_check` replaced it) |

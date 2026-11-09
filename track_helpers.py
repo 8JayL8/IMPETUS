@@ -110,9 +110,11 @@ def _carry_normal(P, T, N0):
 
 
 # Cobra roll shape with a top radius of 1 (see TrackPart.cobrarollCG_func). It doesn't depend on
-# the size, so it is worked out once per neck height and cached.
+# the size, so it is worked out once per neck height / neck radius and cached.
+#   neck_radius: radius of the dip at the neck, as a multiple of the top radius. The train is much
+#   faster at the neck than at the top, so a neck as tight as the top always went over 5 g.
 @lru_cache(maxsize=8)
-def _cobra_unit_shape(neck_fraction, n_fine=20001):
+def _cobra_unit_shape(neck_fraction, neck_radius=2.0, n_fine=20001):
     u = np.linspace(0, 1, n_fine)
 
     # 1. Half loop: pitch angle = pi * u^2, so curvature rises linearly from 0 to 1 (an Euler spiral)
@@ -123,24 +125,26 @@ def _cobra_unit_shape(neck_fraction, n_fine=20001):
     top_height = P_loop[-1, 1]
 
     # 2. Half corkscrew: heading turns from -X to -Z (smoothly) while it dives and levels out.
-    #    dive_max sets how deep it dives; its length makes the starting curvature match the top.
-    def half_corkscrew(dive_max):
-        length = dive_max * np.pi
+    #    The dive angle follows a cubic (Hermite) curve, chosen so that the curvature is
+    #      - 1 where it leaves the top (the same as the top of the half loop: no jolt), and
+    #      - 1 / neck_radius at the neck, where it pulls out of the dive (a wider, gentler dip).
+    #    Its length sets how deep it dives.
+    def half_corkscrew(length):
         heading = (np.pi / 2) * (3 * u**2 - 2 * u**3)
-        dive = -dive_max * np.sin(np.pi * u)
+        dive = -length * (u**3 - 2 * u**2 + u) + (length / neck_radius) * (u**3 - u**2)
         T = np.column_stack((-np.cos(dive) * np.cos(heading), np.sin(dive), -np.cos(dive) * np.sin(heading)))
         return length, T, _integrate_directions(T, length / (n_fine - 1))
 
-    # Find the dive angle that puts the neck at neck_fraction of the height (bisection)
-    low, high = 0.2, 1.5
+    # Find the length that puts the neck at neck_fraction of the height (bisection)
+    low, high = 0.5, 40.0
     for _ in range(60):
-        dive_max = 0.5 * (low + high)
-        _, _, P_try = half_corkscrew(dive_max)
+        length = 0.5 * (low + high)
+        _, _, P_try = half_corkscrew(length)
         if top_height + P_try[-1, 1] > neck_fraction * top_height:
-            low = dive_max
+            low = length
         else:
-            high = dive_max
-    cork_length, T_cork, P_cork = half_corkscrew(dive_max)
+            high = length
+    cork_length, T_cork, P_cork = half_corkscrew(length)
     P_cork = P_cork + P_loop[-1]
     for arr in (P_loop, T_loop, P_cork, T_cork):
         arr.flags.writeable = False   # shared by every call: make sure nothing changes them
@@ -220,9 +224,52 @@ def _build(file_name, prop, X, Y, Z, Nx, Ny, Nz):
     return _finish(file_name, prop, X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz)
 
 
+# Makes a flat (X-Y plane) track symmetric about its highest point: the second half is replaced
+# by a mirror image of the first half, so the train comes out the same way it went in.
+def _mirror_about_crest(X, Y):
+    c = int(np.argmax(Y))
+    X = np.concatenate([X[:c + 1], 2 * X[c] - X[c - 1::-1]])
+    Y = np.concatenate([Y[:c + 1], Y[c - 1::-1]])
+    return X, Y
+
+
+# Bends the first and last few metres of a flat (X-Y plane) track very slightly so it starts and
+# ends exactly level, keeping the end heights. Without this, a track that ends while still
+# sloping leaves a kink where the next section starts (a jolt the riders would feel).
+# The correction is a cubic that is 0 at both ends of the stretch it changes, so nothing jumps.
+def _level_ends(X, Y, blend=10.0):
+    X, Y = X.astype(float), Y.astype(float).copy()
+    blend = min(blend, 0.15 * (X[-1] - X[0]))
+    slope_start = (Y[1] - Y[0]) / (X[1] - X[0])
+    slope_end = (Y[-1] - Y[-2]) / (X[-1] - X[-2])
+
+    t = (X - X[0]) / blend                                # 0 -> 1 over the first `blend` metres
+    first = t < 1
+    Y[first] -= slope_start * blend * (t[first]**3 - 2 * t[first]**2 + t[first])
+
+    t = (X - (X[-1] - blend)) / blend                     # 0 -> 1 over the last `blend` metres
+    last = t > 0
+    Y[last] -= slope_end * blend * (t[last]**3 - t[last]**2)
+    return X, Y
+
+
 # Reads a prebuilt track (from Prebuilt_tracks/), scales it so its max height is h,
-# and stretches its X by x_stretch
-def _load_prebuilt(csv_name, h, x_stretch, file_name):
+# and stretches its X by x_stretch.
+#   tidy=True (for the flat lift hill / camelback shapes): starts and ends the track exactly level,
+#   optionally makes it symmetric (mirror=True), and works out the front / up vectors again from
+#   the final shape, so the saved segment matches the track that is actually used.
+def _load_prebuilt(csv_name, h, x_stretch, file_name, tidy=False, mirror=False):
+    if tidy:
+        data = file_utils.read_csv(csv_name)
+        scale = h / np.max(data[:, 2])
+        X, Y = data[:, 1] * scale * x_stretch, data[:, 2] * scale
+        if mirror:
+            X, Y = _mirror_about_crest(X, Y)
+        X, Y = _level_ends(X, Y)
+        Z = np.zeros_like(X)
+        Nx, Ny, Nz = _planar_normals(X, Y)
+        return _build(file_name, h, X, Y, Z, Nx, Ny, Nz)
+
     data = file_utils.read_csv(csv_name)
     track = data.copy()
 

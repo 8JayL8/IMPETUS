@@ -35,6 +35,7 @@ VALUE_RANGE = (1, 50)                   # same slider range as the GUI
 
 CHECK_WARNINGS = {
     "velocity_check": "Not enough velocity to get through this section.",
+    "max_g_check": "Riders feel 5Gs or more somewhere in this section.",
     "valley_check": "Valley G-force exceeds 5Gs.",
     "inversion_check": "Too slow or too fast to clear the inversion peak.",
     "peak_check": "Speed too high over crest (Airborne).",
@@ -287,8 +288,20 @@ def _arr(values, decimals=3):
     return np.round(values, decimals).tolist()
 
 
+# Force pushing riders into their seats at every point of the combined track, in g
+# (1 = normal weight, 0 = weightless, below 0 = lifted out of the seat). Uses the same formula as the
+# physics checks (physics.rider_forces) with the ride speeds, so it matches what the train does.
+# NaN where the train has stopped.
+def _seat_forces(combined, speeds):
+    X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz = (np.ravel(a).astype(float) for a in combined[:12])
+    geometry = physics.track_geometry((X, Y, Z), (Nx, Ny, Nz))
+    seat_g, _lateral_g = physics.rider_forces(geometry, speeds)
+    return seat_g
+
+
 def _to_json(requests, combined, xy_composition, track_data, part_lengths, speeds, losses=None):
     X, Y, Z, Fx, Fy, Fz, Lx, Ly, Lz, Nx, Ny, Nz, _name = combined
+    seat_g = _seat_forces(combined, speeds)
 
     sections = []
     for (section, track_type, value), length in zip(requests, part_lengths):
@@ -306,7 +319,9 @@ def _to_json(requests, combined, xy_composition, track_data, part_lengths, speed
     return {
         "track": {"X": _arr(X), "Y": _arr(Y), "Z": _arr(Z), "Nx": _arr(Nx, 4), "Ny": _arr(Ny, 4), "Nz": _arr(Nz, 4),
                   # ride speed at every point (m/s); null where the train has stopped
-                  "V": [None if not math.isfinite(v) else round(float(v), 3) for v in speeds]},
+                  "V": [None if not math.isfinite(v) else round(float(v), 3) for v in speeds],
+                  # seat force at every point (g); null where the train has stopped
+                  "G": [None if not math.isfinite(g) else round(float(g), 2) for g in seat_g]},
         "losses": losses,
         "sections": sections,
         "profile": [{"section": seg["section"], "type": seg["type"], "XY": _arr(seg["XY"]), "Z": _arr(seg["Z"])}

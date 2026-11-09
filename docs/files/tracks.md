@@ -14,12 +14,12 @@ full coaster. Every builder returns the [12-array track format](../README.md#the
 | Function | Track type | Input | How it's made | Returns |
 |---|---|---|---|---|
 | `launcher_func(L)` | Launcher | length L | Flat straight; `v_exit = √(2·1.5g·L)` | `(arrays, v_exit)` |
-| `lifthill_func(h)` | Lift Hill | height h | Prebuilt `cometlifthill.csv` scaled to h; `v_exit = √(2g·h_max)` | `(arrays, v_exit)` |
+| `lifthill_func(h)` | Lift Hill | height h | Prebuilt `cometlifthill.csv` scaled to h, ends levelled; `v_exit = √(2g·h_max)` | `(arrays, v_exit)` |
 | `rollback_func(h)` | Rollback | height h | 60° slope + circular curve + flat station (equations) | `(arrays, v_exit)` |
 | `loopCG_func(h)` | Loop | height h | Constant-g loop, simulated step by step, scaled to height h, side-offset exit | arrays |
-| `camelback_func(h)` | Camelback | height h | Prebuilt `cometcamelback.csv`, X squashed to 1/3 | arrays |
+| `camelback_func(h)` | Camelback | height h | Climb half of prebuilt `cometcamelback.csv` + its mirror image (the file's descent is cut short), X squashed to 1/3, ends levelled | arrays |
 | `corkscrew_func(h)` | Corkscrew | height h | Ramp in → 1.5 barrel rolls (radius h/2) → ramp out | arrays |
-| `cobrarollCG_func(h)` | Cobra Roll | height h | Euler-spiral half loop + half corkscrew, then mirrored; reverses direction | arrays |
+| `cobrarollCG_func(h)` | Cobra Roll | height h | Euler-spiral half loop + half corkscrew down to the neck (35% of h, pull-out radius 2× the top radius), then mirrored; reverses direction | arrays |
 | `helix_func(h)` | Helix | height h | Climb, 1.5-turn clothoid spiral (radius 2h, banking 45°→63.4°), exit | arrays |
 | `horseshoe_func(h)` | Horseshoe | height h | 180° turn that climbs to h, banking rolls in/out | arrays |
 | `brake_func(L)` | Brake | length L | Flat straight (1.5g deceleration is applied in the checks) | arrays |

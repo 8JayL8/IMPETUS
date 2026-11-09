@@ -297,6 +297,21 @@ def inversion_seat_check(seat_g, normal_y):
 
 
 # Crest (airtime) check: no point where riders are lifted out of their seats (seat force < 0 g).
+# Riders must be pushed into their seats with less than 5 g at EVERY point of the section.
+# valley_check only looks at the lowest dip, so a tight bend higher up (e.g. the "neck" in the
+# middle of a cobra roll) could go over 5 g without failing anything.
+# Returns (passed, highest seat force in g)
+MAX_SEAT_G = 5.0
+
+
+def max_g_check(seat_g):
+    ok = np.isfinite(seat_g)
+    if not ok.any():
+        return True, None   # the train never moves through this section (velocity_check covers that)
+    worst = float(np.max(seat_g[ok]))
+    return worst < MAX_SEAT_G, worst
+
+
 def airtime_check(seat_g):
     ok = np.isfinite(seat_g)
     if not ok.any():

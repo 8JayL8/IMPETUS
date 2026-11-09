@@ -11,7 +11,7 @@ Page layout only — no logic. Loads `js/main.js` as an ES module.
 
 | Area | Element ids |
 |---|---|
-| Header bar | `status`, `show-direction`, `show-normals`, `show-supports`, `fit-btn`, `export-btn` |
+| Header bar | `status`, `show-direction`, `show-normals` ("Normal force"), `show-supports`, `fit-btn`, `export-btn` |
 | Left sidebar | `sections` (section cards from `section-template`), friction / air toggles and inputs (`friction-btn`, `air-btn`, `mu-input`, `cd-input`, `area-input`, `mass-input`), `physics-summary` |
 | 3D view | `view3d`, ride controls (`ride-btn`, `ride-reset`, `ride-speed`, `cam-mode`), HUD (`hud-speed`, `hud-section`, `hud-note`) |
 | Bottom panel | `profile` (side view canvas), `topview` (top view canvas) |
@@ -38,7 +38,7 @@ Plain ES modules (`import` / `export`), no build step. The browser loads `main.j
 | `exportDialog.js` | `setupExportDialog()` | Export dialog → `POST /api/export`, asks before overwriting |
 | `splitters.js` | `setupSplitters()` | Draggable / collapsible panels (sizes saved in `localStorage`) |
 | `scene.js` | `renderer`, `scene`, `camera`, `controls`, `view3d`, `resize3D()` | Three.js setup and lights |
-| `track3d.js` | `render3D(result)`, `fitCamera()` | Rails + spine from the up-vectors, support columns, normals, ground grid |
+| `track3d.js` | `render3D(result)`, `fitCamera()`, `G_BANDS` | Rails + spine from the up-vectors, support columns, ground grid, and the normal force lines (length = g felt, coloured by `G_BANDS`) |
 | `markers.js` | `addStartMarker()`, `addEndMarker()`, `addDirectionArrows()` | START platform, END label, direction cones (added to a given group) |
 | `ride.js` | `ride`, `updateRide()`, `stepRide(dt)`, `poseAt()`, `CAR_LENGTH`, `CAR_HEIGHT` | The 4-car train, its speed along the track (`track.V`), HUD, Start/Reset buttons |
 | `cameras.js` | `setCameraMode()`, `updateCamera(dt)`, `initFreeSpeed()` | Orbit, free-fly (WASD/QE/Space/Shift, drag, wheel) and on-ride cameras |
