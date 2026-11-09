@@ -1,8 +1,15 @@
 # server.py
 # Web frontend for IMPETUS. Run:   python server.py
 # then open http://127.0.0.1:8000
+#
+# To let other devices on the same network use it:   python server.py --lan
+# then open http://<this computer's IP>:8000 on them (the address is printed at startup).
+# --lan runs several worker processes so many people can use it at once; set the number with --workers.
+# Only use --lan on a network you trust: there is no login, and anyone on it can export files.
 # (The PyQt app, GUI.py, still works on its own.)
+import argparse
 import os
+import socket
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -88,6 +95,36 @@ def index():
 app.mount("/", StaticFiles(directory=WEB_DIR), name="web")
 
 
+def _lan_ip():
+    # The address other devices use to reach this computer (no data is actually sent)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except OSError:
+        return "<this computer's IP>"
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+    parser = argparse.ArgumentParser(description="IMPETUS web frontend")
+    parser.add_argument("--lan", action="store_true",
+                        help="allow other devices on the local network to connect")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--workers", type=int, default=None,
+                        help="worker processes (default: 1, or up to 4 with --lan)")
+    args = parser.parse_args()
+
+    host = "0.0.0.0" if args.lan else "127.0.0.1"
+    workers = args.workers or (min(4, os.cpu_count() or 1) if args.lan else 1)
+
+    print(f"IMPETUS running on this computer:  http://127.0.0.1:{args.port}")
+    if args.lan:
+        print(f"Other devices on the network:      http://{_lan_ip()}:{args.port}")
+        print("(If they can't connect, allow Python through Windows Firewall on private networks.)")
+    print(f"Worker processes: {workers}")
+
+    # "server:app" (not app) so uvicorn can start several worker processes
+    uvicorn.run("server:app", host=host, port=args.port, workers=workers,
+                app_dir=os.path.dirname(os.path.abspath(__file__)))

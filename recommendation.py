@@ -24,6 +24,7 @@ class EnergyRecommendation:
     """
     _cache = {}          # (section kind, track type, entry speed, range, losses) -> (min, max) or None
     _CACHE_LIMIT = 5000
+    _MISSING = object()  # cached ranges can be None, so "not cached" needs its own marker
 
     @classmethod
     def get_recommendations(cls, start_type, start_value, builders, sections, value_range=(1, 50),
@@ -60,12 +61,15 @@ class EnergyRecommendation:
                         continue
                     # Thrills 1 and Thrills 2 use the same tracks, so a range is only tested once per speed
                     test_key = (section_name == "Ends", track_type, round(float(v_entry), 6), value_range, loss_key)
-                    if test_key not in cls._cache:
+                    # .get() + a local copy: another web request may clear the cache in between
+                    found = cls._cache.get(test_key, cls._MISSING)
+                    if found is cls._MISSING:
+                        found = cls._safe_range(
+                            builders[track_type], section_name, track_type, v_entry, value_range, losses)
                         if len(cls._cache) >= cls._CACHE_LIMIT:
                             cls._cache.clear()
-                        cls._cache[test_key] = cls._safe_range(
-                            builders[track_type], section_name, track_type, v_entry, value_range, losses)
-                    recs[section_name][track_type] = cls._cache[test_key]
+                        cls._cache[test_key] = found
+                    recs[section_name][track_type] = found
 
                 # Carry the speed through the track the user picked here (if any)
                 if losses and section_name in chosen and v > 0:

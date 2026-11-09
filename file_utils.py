@@ -3,22 +3,32 @@ import shutil
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
+import threading
 from contextlib import contextmanager
 from functools import lru_cache
 
-_segments_dir = None   # set by initalize_folders(); write_csv saves track parts here
+# Folder write_csv saves track parts into, set by initalize_folders(). Kept per thread, so the
+# web server can build several tracks at once without one request's folder leaking into another.
+_local = threading.local()
+
+
+def _get_segments_dir():
+    return getattr(_local, "segments_dir", None)
+
+
+def set_segments_dir(path):
+    _local.segments_dir = path
 
 
 # Temporarily stop write_csv from saving segments (used for test builds, e.g. recommendations)
 @contextmanager
 def no_segment_writes():
-    global _segments_dir
-    saved = _segments_dir
-    _segments_dir = None
+    saved = _get_segments_dir()
+    set_segments_dir(None)
     try:
         yield
     finally:
-        _segments_dir = saved
+        set_segments_dir(saved)
 
 
 # Finds the absolute path of a section folder (inside the IMPETUS folder)
@@ -63,7 +73,6 @@ def _remove(path):
 # Only THIS coaster's old files are cleared, so other coasters in the same section are kept.
 # Returns a dict of the folders: "master", "coaster", "images", "segments"
 def initalize_folders(section_folder, coaster_name):
-    global _segments_dir
     master_folder = get_section_path(section_folder)
 
     folders = {
@@ -81,7 +90,7 @@ def initalize_folders(section_folder, coaster_name):
     for folder in folders.values():
         os.makedirs(folder, exist_ok=True)
 
-    _segments_dir = folders["segments"]
+    set_segments_dir(folders["segments"])
     return folders
 
 
@@ -148,9 +157,10 @@ def _read_csv_cached(file_name):
 # Gets the data, points, track properties (length, height, radius), and track name and convert it into a csv
 def write_csv(data, pts, prop, elementname):
     # Make the filename for CSV (function_Length_Index)
-    if _segments_dir is None:
+    segments_dir = _get_segments_dir()
+    if segments_dir is None:
         return None   # no section folder yet (e.g. running tracks.py on its own)
-    file_name = os.path.join(_segments_dir, f"{elementname}_{prop}.csv")
+    file_name = os.path.join(segments_dir, f"{elementname}_{prop}.csv")
     # Open the file and write the following into it
     with open(file_name, mode="w", newline="") as f:
         writer = csv.writer(f)

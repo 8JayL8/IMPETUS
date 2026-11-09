@@ -58,7 +58,9 @@ track_function_map = {
 }
 
 # file_utils keeps the segments folder in a global, so only one build may run at a time
-_build_lock = threading.Lock()
+# Previews and recommendations run side by side (file_utils keeps the segment folder per thread).
+# Exports take this lock: they write files, and two at once could clash over the same folder.
+_export_lock = threading.Lock()
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9 _\-]{1,64}$")
 # ========================================================================
 
@@ -209,7 +211,7 @@ def _ride_speeds(data, track_data, combined, losses):
 def preview(raw_requests, raw_physics=None):
     requests = validate_requests(raw_requests)
     losses = parse_losses(raw_physics)
-    with _build_lock, file_utils.no_segment_writes():
+    with file_utils.no_segment_writes():
         built = _build(requests, losses=losses)
     return _to_json(requests, *built, losses)
 
@@ -225,15 +227,15 @@ def export(raw_requests, section_folder, coaster_name, overwrite=False, raw_phys
         if not _SAFE_NAME.match(name):
             raise BuildError(f"{label} name may only use letters, numbers, spaces, '_' and '-'.")
 
-    if file_utils.build_exists(section_folder, coaster_name) and not overwrite:
-        return {"exists": True, "section_folder": section_folder, "coaster_name": coaster_name}
-
-    with _build_lock:
+    with _export_lock:
+        # Checked inside the lock, so two people can't both claim the same new name
+        if file_utils.build_exists(section_folder, coaster_name) and not overwrite:
+            return {"exists": True, "section_folder": section_folder, "coaster_name": coaster_name}
         folders = file_utils.initalize_folders(section_folder, coaster_name)
         try:
             built = _build(requests, folders["master"], coaster_name, write=True, losses=losses)
         finally:
-            file_utils._segments_dir = None   # later previews must never write segments
+            file_utils.set_segments_dir(None)   # later requests on this thread must never write segments
 
     result = _to_json(requests, *built, losses)
     result["saved_to"] = {
@@ -258,10 +260,9 @@ def recommendations(start_type, start_value, raw_physics=None, raw_tracks=None):
                     chosen[section] = (track_type, float(item.get("value")))
                 except (TypeError, ValueError):
                     pass   # still typing: treat the section as skipped
-    with _build_lock:
-        recs = EnergyRecommendation.get_recommendations(
-            start_type, float(start_value), track_function_map, RECOMMEND_SECTIONS, value_range=VALUE_RANGE,
-            losses=losses, chosen=chosen)
+    recs = EnergyRecommendation.get_recommendations(
+        start_type, float(start_value), track_function_map, RECOMMEND_SECTIONS, value_range=VALUE_RANGE,
+        losses=losses, chosen=chosen)
     return {
         "v_exit": _num(recs["v_exit"]),
         "v_entry": {s: _num(v) for s, v in recs["v_entry"].items()},
